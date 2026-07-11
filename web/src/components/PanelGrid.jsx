@@ -1,6 +1,5 @@
-import Hearts from './Hearts.jsx'
-
-// Wizualizacja 9 paneli w siatce 3x3. Podglad LEDow + imie + zycia.
+// Wizualizacja 9 paneli. LEDy sektorow reprezentuja zycia
+// (backend automatycznie synchronizuje sektory z lives).
 export default function PanelGrid({ panels = [], seats = [], size = 'md', highlight = [] }) {
   return (
     <div className={`panel-grid ${size}`}>
@@ -8,7 +7,7 @@ export default function PanelGrid({ panels = [], seats = [], size = 'md', highli
         const sec = panels[p] || [{}, {}, {}]
         const seat = seats.find(s => s.seat === p)
         const hi = highlight.includes(p)
-        const out = seat?.user_id && (seat.lives ?? 3) <= 0
+        const out = seat?.user_id && sec.every(x => !x?.on)
         return (
           <div key={p} className={`pgrid-cell ${hi ? 'hi' : ''} ${out ? 'out' : ''}`}>
             <div className="pgrid-lights">
@@ -22,7 +21,6 @@ export default function PanelGrid({ panels = [], seats = [], size = 'md', highli
               <span className="pgrid-num">{p + 1}</span>
               <span className="pgrid-name">{seat?.name || '—'}</span>
             </div>
-            {seat?.user_id && <Hearts lives={seat.lives ?? 3} size={size === 'lg' ? 'md' : 'sm'} />}
           </div>
         )
       })}

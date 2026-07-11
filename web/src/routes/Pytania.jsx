@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, subscribeState } from '../api'
 
 // Bank pytan. Operator moze przygotowac liste przed gra i podczas trwania
 // jednym kliknieciem ustawiac aktualne pytanie w prezentacji.
@@ -17,7 +17,10 @@ export default function Pytania() {
       setErr(null)
     } catch (e) { setErr(e.message) }
   }
-  useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    refresh()
+    return subscribeState(s => setCurrent(s.question))
+  }, [])
 
   const add = async (e) => {
     e.preventDefault()
@@ -82,20 +85,35 @@ export default function Pytania() {
           <table className="tbl">
             <thead><tr><th>#</th><th>R</th><th>Tresc</th><th>Odpowiedz</th><th>Uzyte</th><th /></tr></thead>
             <tbody>
-              {items.map((q, i) => (
-                <tr key={q.id}>
-                  <td>{i + 1}</td>
-                  <td><span className={`badge r${q.round}`}>R{q.round}</span></td>
-                  <td className="q-cell">{q.text}</td>
-                  <td className="muted">{q.answer || '—'}</td>
-                  <td>{q.used}</td>
-                  <td className="actions">
-                    <button className="btn go" onClick={() => useIt(q.id)}>na ekran</button>
-                    <button className="mini" onClick={() => editRow(q)}>edytuj</button>
-                    <button className="mini danger" onClick={() => del(q.id)}>usun</button>
-                  </td>
-                </tr>
-              ))}
+              {items.map((q, i) => {
+                const active = current?.questionId
+                  ? current.questionId === q.id
+                  : !!(current?.text && current.text.trim() === q.text.trim())
+                const hasAnswer = !!(current?.answer && current.answer.trim())
+                return (
+                  <tr key={q.id} className={active ? 'active' : ''}>
+                    <td>{i + 1}</td>
+                    <td><span className={`badge r${q.round}`}>R{q.round}</span></td>
+                    <td className="q-cell">{q.text}</td>
+                    <td className="muted">{q.answer || '—'}</td>
+                    <td>{q.used}</td>
+                    <td className="actions">
+                      {active ? (
+                        <>
+                          <button className="btn off" onClick={() => api.clearQuestion().then(refresh)}>zdejmij</button>
+                          <button className="btn" onClick={() => api.reveal(!current.showAnswer).then(refresh)}>
+                            {current.showAnswer ? 'ukryj odpowiedz' : 'odslon odpowiedz'}
+                          </button>
+                        </>
+                      ) : (
+                        <button className="btn go" onClick={() => useIt(q.id)}>na ekran</button>
+                      )}
+                      <button className="mini" onClick={() => editRow(q)}>edytuj</button>
+                      <button className="mini danger" onClick={() => del(q.id)}>usun</button>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}

@@ -119,6 +119,8 @@ h2 { margin: 0; }
 .tbl th { font-weight: 600; opacity: .75; }
 .tbl.big { font-size: 1.15rem; }
 .tbl.big th, .tbl.big td { padding: .75rem .5rem; }
+.tbl tr.active { background: linear-gradient(90deg, rgba(58,217,115,.14), transparent); }
+.tbl tr.active td:first-child::before { content: '●'; color: var(--accent); margin-right: .3rem; }
 .tbl tr.top-1 { background: linear-gradient(90deg, rgba(245,197,24,.14), transparent); }
 .tbl tr.top-2 { background: linear-gradient(90deg, rgba(176,176,176,.10), transparent); }
 .tbl tr.top-3 { background: linear-gradient(90deg, rgba(122,74,32,.14), transparent); }
@@ -154,6 +156,43 @@ h2 { margin: 0; }
 .hero-rank .pos.p3 { background: #7a4a20; color: #ffe0b3; }
 .hero-rank .pos   { width: 3rem; height: 3rem; border-radius: 50%; display: inline-flex; justify-content: center; align-items: center; font-weight: 800; }
 .hero-rank .ms    { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ---- PREZENTACJA (tylko pytanie) ---- */
+.prez-only {
+  position: fixed; inset: 0; top: 0;                 /* pod navem — patrz nizej */
+  display: flex; align-items: center; justify-content: center;
+  padding: 4vh 5vw;
+  background: radial-gradient(1200px 800px at 30% -10%, #1a1c2a 0%, var(--bg) 60%);
+}
+.prez-only.r1 { background: radial-gradient(1200px 800px at 30% -10%, #14352a 0%, #0a0f0d 70%); }
+.prez-only.r2 { background: radial-gradient(1200px 800px at 30% -10%, #3d2d0a 0%, #14100a 70%); }
+
+.prez-box {
+  max-width: 92vw; width: 100%;
+  display: flex; flex-direction: column; gap: 2rem; align-items: flex-start;
+}
+.prez-badge {
+  padding: .6rem 1.5rem; border-radius: 999px;
+  font-size: clamp(1rem, 2vw, 1.8rem); font-weight: 900; letter-spacing: .3em;
+}
+.prez-only.r1 .prez-badge { background: linear-gradient(135deg, #3ad973, #2d6a4f); color: #04140a; }
+.prez-only.r2 .prez-badge { background: linear-gradient(135deg, var(--gold), #d99a1a); color: #201700; }
+
+.prez-question {
+  font-size: clamp(2.5rem, 6vw, 6rem);
+  font-weight: 800; line-height: 1.1; text-wrap: balance;
+}
+.prez-answer {
+  margin-top: 1.5rem;
+  font-size: clamp(1.5rem, 3vw, 3rem);
+  color: var(--muted);
+}
+.prez-answer b { color: var(--text); }
+
+.prez-idle {
+  font-size: clamp(3rem, 10vw, 10rem);
+  font-weight: 900; letter-spacing: .2em; opacity: .18;
+}
 
 /* ---- PYTANIA ---- */
 .badge { display: inline-block; padding: .12rem .5rem; border-radius: 999px; font-size: .7rem; font-weight: 800; letter-spacing: .1em; background: var(--panel2); color: var(--muted); border: 1px solid var(--border); }
@@ -199,6 +238,23 @@ h2 { margin: 0; }
 .q-hero .q-reveal { margin-top: 1rem; font-size: clamp(1.2rem, 2.5vw, 2rem); color: var(--muted); }
 .q-hero .q-reveal b { color: var(--text); }
 
+/* ---- STANOWISKA (LED = zycia) ---- */
+.stands-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+@media (max-width: 720px) { .stands-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .stands-grid { grid-template-columns: 1fr; } }
+.stand { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: .6rem .7rem; display: flex; flex-direction: column; gap: .5rem; transition: opacity .2s; }
+.stand.out { opacity: .5; }
+.stand > header { display: grid; grid-template-columns: 2.2rem 1fr; align-items: center; gap: .4rem; }
+.stand .stand-num { display: inline-flex; justify-content: center; align-items: center; width: 2rem; height: 2rem; border-radius: 50%; background: var(--panel); font-weight: 800; font-size: .95rem; }
+.stand select { padding: .35rem .5rem; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; color: var(--text); width: 100%; }
+.stand-lights { display: flex; justify-content: center; gap: .6rem; padding: .4rem 0; }
+.stand-led { width: 2.3rem; height: 2.3rem; border-radius: 50%; background: #26262e; transition: background .15s, box-shadow .15s; }
+.stand-controls { display: grid; grid-template-columns: auto 1fr auto; gap: .35rem; align-items: center; }
+.stand-controls input[type="color"] { width: 2rem; height: 1.9rem; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; cursor: pointer; }
+.stand-controls input[type="color"]:disabled { opacity: .35; cursor: not-allowed; }
+.stand-controls .btn { padding: .35rem .5rem; font-size: .85rem; }
+.stand-controls .mini { padding: .35rem .55rem; font-weight: 700; }
+
 /* ---- HEARTS ---- */
 .hearts { display: inline-flex; gap: .18rem; align-items: center; }
 .heart { width: 1rem; height: 1rem; }
@@ -234,6 +290,9 @@ h2 { margin: 0; }
   color: var(--muted);
 }
 .life-card .lc-name { font-size: clamp(1rem, 2vw, 1.4rem); font-weight: 700; text-align: center; min-height: 1.6em; }
+.lc-lights { display: flex; gap: .6rem; justify-content: center; padding: .5rem 0; }
+.lc-led { width: 3rem; height: 3rem; border-radius: 50%; background: #26262e; transition: background .15s, box-shadow .15s; }
+@media (min-width: 1024px) { .lc-led { width: 3.5rem; height: 3.5rem; } }
 .life-card.out { opacity: .45; }
 .life-card.out .lc-name { text-decoration: line-through; }
 .life-card .lc-out {

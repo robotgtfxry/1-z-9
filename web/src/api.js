@@ -63,6 +63,9 @@ export const api = {
   setLives:    (seat, value) => j('POST', `/api/seats/${seat}/lives`, { value }),
   resetLives:  ()     => j('POST', '/api/lives/reset'),
 
+  // kolor stanowiska (jeden na siedzenie, zycia sterują sektorami)
+  setSeatColor:(seat, color) => j('POST', `/api/seats/${seat}/color`, { color }),
+
   // przyciski rundy 2 (0..2)
   buttons:     () => j('GET',  '/api/buttons'),
   setButton:   (button, userId) => j('POST', `/api/buttons/${button}`, { userId }),

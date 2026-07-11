@@ -45,7 +45,7 @@ const stmt = {
   deleteUser:     db.prepare(`DELETE FROM users WHERE id = ?`),
 
   getSeats:       db.prepare(`
-    SELECT s.seat, u.id AS user_id, u.name, s.lives
+    SELECT s.seat, u.id AS user_id, u.name, s.lives, s.color
     FROM seats s LEFT JOIN users u ON u.id = s.user_id
     ORDER BY s.seat`),
   setSeat:        db.prepare(`UPDATE seats SET user_id = ?, lives = 3 WHERE seat = ?`),
@@ -53,6 +53,7 @@ const stmt = {
   clearAllSeats:  db.prepare(`UPDATE seats   SET user_id = NULL, lives = 3`),
   setLives:       db.prepare(`UPDATE seats SET lives = MAX(0, MIN(3, ?)) WHERE seat = ?`),
   resetAllLives:  db.prepare(`UPDATE seats SET lives = 3`),
+  setColor:       db.prepare(`UPDATE seats SET color = ? WHERE seat = ?`),
 
   getButtons:     db.prepare(`
     SELECT b.button, u.id AS user_id, u.name
@@ -125,6 +126,41 @@ async function fetchEsp(path, opts = {}) {
   return res
 }
 
+function hexToRgb(hex) {
+  let h = String(hex || '').replace('#', '')
+  if (h.length === 3) h = h.split('').map(c => c + c).join('')
+  const n = parseInt(h, 16)
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }
+}
+
+async function espPost(path, body) {
+  try {
+    const r = await fetchEsp(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    })
+    return r.json()
+  } catch (e) { /* ESP moze byc chwilowo offline */ }
+}
+
+// Zycia = ilosc swiecacych sektorow. Kolor = kolor stanowiska.
+async function syncSeatLeds(seat) {
+  const s = stmt.getSeats.all().find(x => x.seat === seat)
+  if (!s) return
+  const active = s.user_id ? (s.lives ?? 0) : 0
+  const { r, g, b } = hexToRgb(s.color || '#e05252')
+  if (active === 3) return espPost('/api/panel', { panel: seat, on: true, r, g, b })
+  if (active === 0) return espPost('/api/panel', { panel: seat, on: false, r, g, b })
+  await Promise.all([0, 1, 2].map(sec =>
+    espPost('/api/sector', { panel: seat, sector: sec, on: sec < active, r, g, b })
+  ))
+}
+
+async function syncAllSeats() {
+  for (let i = 0; i < 9; i++) await syncSeatLeds(i)
+}
+
 function broadcastSse() {
   const data = `data: ${JSON.stringify({ t: Date.now() })}\n\n`
   for (const res of sseClients) {
@@ -153,10 +189,11 @@ function recordNewEvents() {
   const positions = currentPositions()
   const btnRows = stmt.getButtons.all()
   const btnUser = new Map(btnRows.map(r => [r.button, r.user_id]))
-
   const now = Date.now()
-  const tx = db.transaction((events) => {
-    for (const e of events) {
+
+  db.exec('BEGIN')
+  try {
+    for (const e of espState.events) {
       const key = `${e.id}:${e.t}`
       if (recordedEventIds.has(key)) continue
       recordedEventIds.add(key)
@@ -169,15 +206,21 @@ function recordNewEvents() {
         stmt.updateBestTime.run(e.t, e.t, userId)
       }
     }
-  })
-  tx(espState.events)
+    db.exec('COMMIT')
+  } catch (err) {
+    try { db.exec('ROLLBACK') } catch {}
+    throw err
+  }
 }
 
 async function pollLoop() {
   try {
     const r = await fetchEsp('/api/state')
     espState = await r.json()
-    if (!espOk) console.log('[esp] polaczono')
+    if (!espOk) {
+      console.log('[esp] polaczono — sync LEDow')
+      syncAllSeats()
+    }
     espOk = true
 
     if (espState.round2 && !round2WasActive) {
@@ -223,12 +266,23 @@ app.delete('/api/users/:id', requireAuth, (req, res) => {
 app.get('/api/seats',   (_, res) => res.json(stmt.getSeats.all()))
 app.get('/api/buttons', (_, res) => res.json(stmt.getButtons.all()))
 
-app.post('/api/seats/:seat', requireAuth, (req, res) => {
+app.post('/api/seats/:seat', requireAuth, async (req, res) => {
   const seat = Number(req.params.seat)
   const userId = req.body?.userId ?? null
   if (seat < 0 || seat > 8) return res.status(400).json({ err: 'range' })
   if (userId != null) stmt.clearSeatByUser.run(userId)   // jedno miejsce na usera
   stmt.setSeat.run(userId, seat)
+  syncSeatLeds(seat)
+  res.json({ ok: true })
+})
+
+app.post('/api/seats/:seat/color', requireAuth, async (req, res) => {
+  const seat = Number(req.params.seat)
+  if (seat < 0 || seat > 8) return res.status(400).json({ err: 'range' })
+  const color = String(req.body?.color || '').trim()
+  if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) return res.status(400).json({ err: 'bad color' })
+  stmt.setColor.run(color, seat)
+  syncSeatLeds(seat)
   res.json({ ok: true })
 })
 
@@ -241,11 +295,11 @@ app.post('/api/buttons/:button', requireAuth, (req, res) => {
   res.json({ ok: true })
 })
 
-app.post('/api/seats/reset',   requireAuth, (_, res) => { stmt.clearAllSeats.run();   res.json({ ok: true }) })
+app.post('/api/seats/reset',   requireAuth, async (_, res) => { stmt.clearAllSeats.run();   syncAllSeats(); res.json({ ok: true }) })
 app.post('/api/buttons/reset', requireAuth, (_, res) => { stmt.clearAllButtons.run(); res.json({ ok: true }) })
 
 // Zycia
-app.post('/api/seats/:seat/lives', requireAuth, (req, res) => {
+app.post('/api/seats/:seat/lives', requireAuth, async (req, res) => {
   const seat = Number(req.params.seat)
   if (seat < 0 || seat > 8) return res.status(400).json({ err: 'range' })
   const cur = stmt.getSeats.all().find(s => s.seat === seat)
@@ -256,10 +310,11 @@ app.post('/api/seats/:seat/lives', requireAuth, (req, res) => {
   else if (typeof value === 'number') next = value
   else return res.status(400).json({ err: 'delta or value required' })
   stmt.setLives.run(next, seat)
+  syncSeatLeds(seat)
   res.json({ ok: true })
 })
 
-app.post('/api/lives/reset', requireAuth, (_, res) => { stmt.resetAllLives.run(); res.json({ ok: true }) })
+app.post('/api/lives/reset', requireAuth, async (_, res) => { stmt.resetAllLives.run(); syncAllSeats(); res.json({ ok: true }) })
 
 // ---------- API: wyniki / leaderboard ----------
 app.get('/api/leaderboard', (_, res) => res.json(stmt.leaderboard.all()))
