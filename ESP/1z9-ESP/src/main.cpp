@@ -13,6 +13,11 @@
 static const char* WIFI_SSID = "TWOJE_WIFI";
 static const char* WIFI_PASS = "TWOJE_HASLO";
 
+// -------- TOKEN do API --------
+// Backend Node musi wysylac ten sam token w naglowku X-Api-Token
+// (patrz server/.env: ESP_API_TOKEN). Chroni przed dowolnym urzadzeniem w LAN.
+static const char* API_TOKEN = "1z9-esp-token";
+
 // -------- LINK do Uno --------
 // Adafruit Metro ESP32-S3: TX = GPIO43, RX = GPIO44 (piny oznaczone TX/RX na plytce).
 #define LINK        Serial1
@@ -84,7 +89,17 @@ static void readLink() {
 static void sendCors() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type,X-Api-Token");
+}
+
+// -------- AUTH --------
+// Zwraca true, gdy token OK. W przeciwnym razie odpisuje 401 i zwraca false.
+static bool checkToken() {
+  String t = server.header("X-Api-Token");
+  if (t == API_TOKEN) return true;
+  sendCors();
+  server.send(401, "application/json", "{\"err\":\"unauthorized\"}");
+  return false;
 }
 
 static void sendJson(int code, const String& body) {
@@ -133,6 +148,7 @@ static void handleState() {
 
 // POST /api/sector  { panel, sector, on, r, g, b }
 static void handleSector() {
+  if (!checkToken()) return;
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, server.arg("plain"));
   if (err) { sendJson(400, "{\"err\":\"json\"}"); return; }
@@ -151,6 +167,7 @@ static void handleSector() {
 
 // POST /api/panel  { panel, on, r, g, b }  - wszystkie 3 sektory panelu
 static void handlePanel() {
+  if (!checkToken()) return;
   JsonDocument doc;
   if (deserializeJson(doc, server.arg("plain"))) { sendJson(400, "{\"err\":\"json\"}"); return; }
   int p = doc["panel"] | -1;
@@ -169,6 +186,7 @@ static void handlePanel() {
 
 // POST /api/offall
 static void handleOffAll() {
+  if (!checkToken()) return;
   for (int p = 0; p < NUM_PANELS; p++)
     for (int s = 0; s < SECTORS_PER_PANEL; s++)
       sectors[p][s] = { 0, 0, 0, false };
@@ -178,6 +196,7 @@ static void handleOffAll() {
 
 // POST /api/bright  { v: 0..255 }
 static void handleBright() {
+  if (!checkToken()) return;
   JsonDocument doc;
   if (deserializeJson(doc, server.arg("plain"))) { sendJson(400, "{\"err\":\"json\"}"); return; }
   int v = doc["v"] | 128;
@@ -187,8 +206,8 @@ static void handleBright() {
   sendJson(200, "{\"ok\":true}");
 }
 
-static void handleR2Start() { linkPrintln("ROUND2:START"); sendJson(200, "{\"ok\":true}"); }
-static void handleR2Stop()  { linkPrintln("ROUND2:STOP");  sendJson(200, "{\"ok\":true}"); }
+static void handleR2Start() { if (!checkToken()) return; linkPrintln("ROUND2:START"); sendJson(200, "{\"ok\":true}"); }
+static void handleR2Stop()  { if (!checkToken()) return; linkPrintln("ROUND2:STOP");  sendJson(200, "{\"ok\":true}"); }
 
 // GET /api/health
 static void handleHealth() {
@@ -224,6 +243,10 @@ void setup() {
     Serial.println("[WiFi] brak polaczenia - restart za chwile");
     delay(3000); ESP.restart();
   }
+
+  // Zbieraj naglowki potrzebne do auth (WebServer domyslnie nie parsuje ich wszystkich)
+  const char* wantedHeaders[] = { "X-Api-Token" };
+  server.collectHeaders(wantedHeaders, 1);
 
   // Router
   server.on("/api/state",         HTTP_GET,     handleState);

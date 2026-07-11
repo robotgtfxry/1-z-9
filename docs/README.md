@@ -1,104 +1,178 @@
 # 1 z 9 — dokumentacja
 
-Sterowanie do gry "1 z 9": 9 paneli LED (adresowalne, po 3 sektory) + 3 przyciski w rundzie 2. Trzy elementy oprogramowania: Arduino Uno (hardware), ESP32-S3 (WiFi + API), React (panel operatora).
+Sterowanie do gry teleturniejowej "1 z 9". Cztery czesci:
+
+1. **Arduino Uno** — steruje 9 tasmami WS2812B + czyta 3 przyciski rundy 2.
+2. **ESP32-S3** (Adafruit Metro) — WiFi + surowe JSON API do LED / przyciskow.
+3. **Backend Node.js + SQLite** — trzyma graczy, wyniki, siedzenia, przechwytuje eventy z ESP.
+4. **React + Vite** — panel operatora, prezentacja dla widowni, tablica wynikow, ekrany TV za graczami.
 
 ## Struktura repo
 
 ```
 1-z-9/
-├── ARDUINO/1z9-ARDU/       # PlatformIO – Arduino Uno
+├── ARDUINO/1z9-ARDU/          # PlatformIO – Arduino Uno
 │   ├── platformio.ini
 │   └── src/main.cpp
-├── ESP/1z9-ESP/            # PlatformIO – Adafruit Metro ESP32-S3
+├── ESP/1z9-ESP/               # PlatformIO – Adafruit Metro ESP32-S3
 │   ├── platformio.ini
 │   └── src/main.cpp
-├── web/                    # React + Vite – panel operatora
+├── server/                    # Node.js backend
+│   ├── package.json
+│   ├── index.js               # Express + ESP poller + SSE
+│   ├── db.js                  # better-sqlite3 schema
+│   └── .env.example
+├── web/                       # React + Vite frontend
 │   ├── package.json
 │   ├── vite.config.js
-│   ├── index.html
+│   ├── .env.example
 │   └── src/
-│       ├── main.jsx
-│       ├── App.jsx
+│       ├── main.jsx           # BrowserRouter root
+│       ├── App.jsx            # routes
 │       ├── App.css
-│       └── api.js
+│       ├── api.js
+│       ├── components/PanelGrid.jsx
+│       └── routes/
+│           ├── Operator.jsx
+│           ├── Rejestracja.jsx
+│           ├── Prezentacja.jsx
+│           ├── Wyniki.jsx
+│           └── Gracz.jsx      # /wyniki/gracz/:seat
 └── docs/README.md
 ```
 
-## Sprzet
+## Widoki (routing frontend)
 
-- **Arduino Uno R3** — steruje LEDami i przyciskami.
-- **Adafruit Metro ESP32-S3** — WiFi, hosti JSON API, gada z Uno przez UART.
-- **Level shifter** bidirectional (np. TXS0108E albo dzielnik napiecia) — miedzy Uno (5 V) a ESP32-S3 (3.3 V).
-- **9 tasm WS2812B** — jedna na panel, kazda dzielona na 3 sektory logicznie (domyslnie 10 LED / sektor → 30 LED / panel; zmien `LEDS_PER_SECTOR` w `main.cpp`).
-- **3 przyciski arcade** — dla 3 finalistow.
-- **Zasilacz 5 V** — osobno dla LEDow; masa wspolna z Arduino.
+| URL                     | Dla kogo                          | Co pokazuje                                          |
+|-------------------------|-----------------------------------|------------------------------------------------------|
+| `/`                     | Operator (laptop/tablet)          | Kontrola LED, siedzen, przyciskow, pytania + mini prezentacja |
+| `/rejestracja`          | Prowadzacy / gracze przed gra     | Formularz + lista graczy z ich statystykami          |
+| `/pytania`              | Prowadzacy                        | Bank pytan (dodaj/edytuj/usun) + szybkie "na ekran"  |
+| `/prezentacja`          | Widownia (glowny ekran / rzutnik) | Pytanie z badgem rundy, 9 paneli, "kto pierwszy" w rundzie 2 |
+| `/wyniki`               | TV pomocniczy / laptop sedziego   | Leaderboard: top 100 po wygranych i najlepszym czasie|
 
-## Pinout — Arduino Uno
+`seat` w URL to indeks 0..8. Dla TV za graczem 1 uzyj `/wyniki/gracz/0`, dla gracza 2 `/wyniki/gracz/1` itd.
+
+## Hardware
+
+### Arduino Uno – pinout
 
 | Pin        | Funkcja                                    |
 |------------|--------------------------------------------|
 | D0 (RX)    | UART <- ESP32-S3 TX (przez level shifter)  |
 | D1 (TX)    | UART -> ESP32-S3 RX (przez level shifter)  |
-| D2..D10    | 9 tasm WS2812B (DATA) - panele 1..9        |
+| D2..D10    | 9 tasm WS2812B (DATA), panele 1..9         |
 | A0, A1, A2 | 3 przyciski rundy 2 (do GND, INPUT_PULLUP) |
 
-**Uwaga:** UART (D0/D1) jest wspoldzielony z USB. **Podczas flashowania odlacz linie do ESP32.** Po flashowaniu podlacz ponownie.
+**UART D0/D1 wspoldziela z USB. Podczas flashowania odlacz linie do ESP32.**
 
-## Pinout — ESP32-S3 (Adafruit Metro)
+### Metro ESP32-S3 – pinout
 
-| Pin GPIO | Funkcja                                    |
-|----------|--------------------------------------------|
-| GPIO 43  | TX (Serial1) -> Uno RX (przez level shifter) |
-| GPIO 44  | RX (Serial1) <- Uno TX (przez level shifter) |
-| GND      | GND wspolna                                |
+| GPIO   | Funkcja                                        |
+|--------|------------------------------------------------|
+| 43 (TX)| Serial1 -> Arduino RX (przez level shifter)    |
+| 44 (RX)| Serial1 <- Arduino TX (przez level shifter)    |
 
 ## Zasilanie
 
-- LEDy licz ok. 60 mA na diode przy pelnej bieli. 9 × 30 = 270 LED → do 16 A worst-case. Realnie z jasnoscia 64–128 wystarczy 5 V / 10 A.
+- LEDy: ok. 60 mA/dioda przy pelnej bieli. 9 × 30 = 270 LED → do 16 A worst-case. Realnie z jasnoscia 64–128 wystarczy 5 V / 10 A.
 - **NIE** zasilaj tylu diod z USB.
 - Wspolna masa: PSU LED — Uno GND — ESP32 GND.
 
-## Protokol UART (linie CRLF, 115200 8N1)
+## Protokol UART (Uno ↔ ESP, linie CRLF, 115200 8N1)
 
-### ESP32 -> Uno
+### ESP → Uno
 
-| Komenda                                | Efekt                                         |
-|----------------------------------------|-----------------------------------------------|
-| `PANEL:<id>:<sector>:<R>,<G>,<B>`      | Ustaw kolor sektora `0..2` panelu `0..8`.     |
-| `PANEL:<id>:ALL:<R>,<G>,<B>`           | Cały panel na dany kolor.                     |
-| `OFF:<id>:<sector>` / `OFF:<id>:ALL`   | Zgas sektor lub caly panel.                   |
-| `OFFALL`                                | Zgas wszystko.                                |
-| `BRIGHT:<0-255>`                        | Globalna jasnosc.                             |
-| `ROUND2:START` / `ROUND2:STOP`          | Aktywacja / zamkniecie okna klikniec.         |
-| `PING`                                  | -> `PONG`                                     |
+| Komenda                                | Efekt                                     |
+|----------------------------------------|-------------------------------------------|
+| `PANEL:<id>:<sector>:<R>,<G>,<B>`      | Ustaw kolor sektora `0..2` panelu `0..8`. |
+| `PANEL:<id>:ALL:<R>,<G>,<B>`           | Caly panel na dany kolor.                 |
+| `OFF:<id>:<sector>` / `OFF:<id>:ALL`   | Zgas sektor lub caly panel.               |
+| `OFFALL`                                | Zgas wszystko.                            |
+| `BRIGHT:<0-255>`                        | Globalna jasnosc.                         |
+| `ROUND2:START` / `ROUND2:STOP`          | Aktywacja / zamkniecie okna klikniec.     |
+| `PING`                                  | → `PONG`                                  |
 
-### Uno -> ESP32
+### Uno → ESP
 
 | Komunikat                | Znaczenie                                             |
 |--------------------------|-------------------------------------------------------|
 | `READY`                  | Boot Uno.                                             |
 | `PONG`                   | Odpowiedz na `PING`.                                  |
 | `ROUND2:STARTED/STOPPED` | Potwierdzenie zmiany stanu rundy.                     |
-| `BTN:<id>:<ms>`          | Gracz `id` (0..2) wcisnal po `ms` ms od startu rundy. |
+| `BTN:<id>:<ms>`          | Przycisk `id` (0..2) wcisniety po `ms` ms od startu.  |
 
-## JSON API (ESP32, port 80)
+## Baza danych (SQLite, `server/data.db`)
 
-CORS: `Access-Control-Allow-Origin: *`.
+Powstaje automatycznie przy pierwszym starcie. Schemat:
 
-| Metoda / URL             | Body                                     | Odpowiedz |
-|--------------------------|------------------------------------------|-----------|
-| `GET  /api/state`        | -                                        | `{ round2, brightness, panels[9][3], events[], numPanels, sectorsPerPanel, numButtons }` |
-| `POST /api/sector`       | `{ panel, sector, on, r, g, b }`         | `{ ok }`  |
-| `POST /api/panel`        | `{ panel, on, r, g, b }`                 | `{ ok }`  |
-| `POST /api/offall`       | -                                        | `{ ok }`  |
-| `POST /api/bright`       | `{ v }`                                  | `{ ok }`  |
-| `POST /api/round2/start` | -                                        | `{ ok }`  |
-| `POST /api/round2/stop`  | -                                        | `{ ok }`  |
-| `GET  /api/health`       | -                                        | `{ ok, ip, rssi, uptimeMs }` |
+- `users(id, name UNIQUE, created_at, games_played, wins, best_reaction_ms)`
+- `seats(seat 0..8, user_id → users, lives 0..3 domyslnie 3)`
+- `buttons(button 0..2, user_id → users)`
+- `round2_results(id, user_id, button_id, reaction_ms, position, ts)`
+- `questions(id, text, answer, round, used, created_at)` — bank pytan
+- `current_question(id=1, question_id?, text, answer, round, show_answer, updated_at)` — pytanie widoczne teraz na prezentacji
 
-## Uruchomienie
+Backend przy kazdym evencie `BTN:` z ESP dopisuje wiersz do `round2_results`, zwieksza `users.wins` (jesli pozycja = 1), aktualizuje `best_reaction_ms` i inkrementuje `games_played`.
 
-### Arduino (PlatformIO)
+## JSON API (backend, port `4000`)
+
+### Uzytkownicy
+- `GET    /api/users`
+- `POST   /api/users` — `{ name }`
+- `DELETE /api/users/:id`
+
+### Siedzenia (0..8) i przyciski (0..2)
+- `GET  /api/seats`, `POST /api/seats/:seat  { userId }`, `POST /api/seats/reset`
+- `GET  /api/buttons`, `POST /api/buttons/:button { userId }`, `POST /api/buttons/reset`
+
+### Zycia (3 na siedzenie, resetowane przy zmianie usera)
+- `POST /api/seats/:seat/lives { delta: -1 | 1 }` — zabierz/dodaj zycie
+- `POST /api/seats/:seat/lives { value: 0..3 }` — ustaw konkretna wartosc
+- `POST /api/lives/reset` — wszystkie siedzenia na 3
+
+### Wyniki
+- `GET /api/leaderboard` — top 100 po wygranych, potem po najlepszym czasie
+- `GET /api/results/recent?limit=30`
+
+### Stan (agregat ESP + DB)
+- `GET /api/state`
+  - Zwraca `{ espOk, round2, brightness, panels[9][3], seats[9], buttons[3], events[] }`
+  - `events[i]` zawiera `{ id, t, position, userName }`
+- `GET /api/stream` — Server-Sent Events, powiadomienie o tick pollera (~300 ms)
+
+### LED (proxy do ESP)
+- `POST /api/led/sector { panel, sector, on, r, g, b }`
+- `POST /api/led/panel  { panel, on, r, g, b }`
+- `POST /api/led/offall`
+- `POST /api/led/bright { v }`
+
+### Runda 2
+- `POST /api/round2/start` / `POST /api/round2/stop`
+
+### Dzwieki (broadcast do wszystkich kart)
+- `GET  /api/sounds` — lista dostepnych dzwiekow (id, label, file, color)
+- `POST /api/sound/play { id }` — broadcast SSE event `sound` → wszystkie karty odtwarzaja
+- `POST /api/sound/stop` — broadcast `sound-stop` → wszystkie karty przerywaja
+
+Pliki mp3 lezacych w `web/public/sounds/` (patrz `web/public/sounds/README.txt`). Lista dzwiekow jest w `server/sounds.js` — dodaj wpis + wrzuc plik z pasujaca nazwa, restart backendu.
+
+**Latencja**: przycisk → dzwiek na wszystkich klientach ~15–40 ms w LAN. Audio jest preladowane na kazdej karcie od momentu jej otwarcia. Autoplay: przegladarka wymaga pierwszego user gesture — w prawym dolnym rogu pokazuje sie przycisk *"Kliknij aby wlaczyc dzwieki"*, ktory znika po jednym klikniecie (osoba przy prezentacji musi to zrobic raz na starcie).
+
+### Pytania
+- `GET  /api/questions` — bank
+- `POST /api/questions { text, answer?, round }` — dodaj do banku
+- `PUT  /api/questions/:id { text?, answer?, round? }` — edytuj
+- `DELETE /api/questions/:id` — usun
+- `GET  /api/question` — aktualne pytanie (widoczne w `/api/state.question` tez)
+- `POST /api/question { text, answer?, round, showAnswer? }` — ustaw recznie
+- `POST /api/question/from/:id` — ustaw z banku (bumpuje `used`)
+- `POST /api/question/reveal { show }` — pokaz/ukryj odpowiedz
+- `POST /api/question/clear` — zdejmij pytanie z prezentacji
+
+## Uruchomienie od zera
+
+### 1. Arduino Uno
 
 ```powershell
 cd ARDUINO\1z9-ARDU
@@ -106,49 +180,81 @@ pio run -t upload
 pio device monitor
 ```
 
-Wymaga `FastLED` — PlatformIO scia̋gnie z `lib_deps`.
+### 2. ESP32-S3
 
-### ESP32-S3 (PlatformIO)
-
-1. W `ESP\1z9-ESP\src\main.cpp` uzupelnij `WIFI_SSID` i `WIFI_PASS`.
-2. Flashuj:
-
-   ```powershell
-   cd ESP\1z9-ESP
-   pio run -t upload
-   pio device monitor
-   ```
-
-3. W monitorze zobaczysz IP. Zapisz je — potrzebne dla web.
-
-### Web (React + Vite)
+Uzupelnij `WIFI_SSID`, `WIFI_PASS` w `ESP\1z9-ESP\src\main.cpp`, potem:
 
 ```powershell
-cd web
+cd ESP\1z9-ESP
+pio run -t upload
+pio device monitor
+```
+
+Skopiuj IP z monitora — potrzebne dla backendu.
+
+### 3. Backend Node
+
+```powershell
+cd server
 npm install
 cp .env.example .env
 ```
 
-Edytuj `.env` i wpisz IP ESP32:
+Wpisz w `.env`:
 
 ```
-VITE_ESP_URL=http://192.168.1.50
+ESP_URL=http://192.168.1.50
+PORT=4000
+DB_PATH=./data.db
+OPERATOR_PASSWORD=1z9-admin
 ```
 
-Odpal dev serwer:
+**Haslo operatora**: chroni wszystkie mutujace endpointy (`/api/led/*`, `/api/round2/*`, `/api/seats/*`, `/api/buttons/*`, `/api/question*`, `/api/users` POST/DELETE, `/api/questions*` POST/PUT/DELETE). Widoki `/prezentacja` i `/wyniki` sa publiczne (tylko GET). Frontend przechowuje haslo w `localStorage` pod kluczem `1z9.password` — logout w prawym gornym rogu nawigacji.
+
+**Token do ESP32** (`ESP_API_TOKEN`): backend dosyla go w naglowku `X-Api-Token` przy kazdej komendzie do ESP. ESP odrzuca POSTy bez wlasciwego tokenu, wiec ktos w LAN nie zmieni scene omijajac backend. **Wartosc musi zgadzac sie z `API_TOKEN` w [ESP/1z9-ESP/src/main.cpp](../ESP/1z9-ESP/src/main.cpp).** Zmien oba przed produkcja.
+
+Odpal:
 
 ```powershell
 npm run dev
 ```
 
-Otworz `http://localhost:5173`. Vite proxy'uje `/api` -> ESP32.
+Powinno wypisac `[server] http://localhost:4000` i po chwili `[esp] polaczono`.
 
-Build produkcyjny (`npm run build`) zbuduje `dist/` — mozesz to hostowac gdziekolwiek (Netlify, nginx, `python -m http.server dist`). Na prodzie ustaw `VITE_API_BASE=http://<IP-ESP32>` w `.env` przed buildem.
+### 4. Frontend React
+
+```powershell
+cd web
+npm install
+cp .env.example .env
+npm run dev
+```
+
+Vite proxyuje `/api` → `http://localhost:4000`, wiec wystarczy otworzyc `http://localhost:5173`.
+
+## Uruchomienie na finalowym zestawie
+
+W dzien produkcji chcesz miec:
+- Laptop operatora → `/` (Chrome/Firefox)
+- Rzutnik/duzy TV z widownia → `/prezentacja` (F11 dla fullscreen)
+- Opcjonalnie pomocniczy TV/monitor sedziego → `/wyniki`
+
+Wszystkie ekrany laduja z tego samego backendu. Ustaw stale IP dla ESP32 (statyczne w routerze) i uruchom backend na jednej maszynie, ktora jest w tej samej sieci. Reszta urzadzen otwiera po prostu URL frontendu.
+
+Build produkcyjny frontendu:
+
+```powershell
+cd web
+$env:VITE_API_BASE="http://<IP-BACKENDU>:4000"
+npm run build
+```
+
+`dist/` mozesz zhostowac np. przez `npx serve dist` lub nginxem.
 
 ## Roadmap
 
-- WebSocket / SSE zamiast pollingu (na razie GET /api/state co 500 ms).
-- Konfiguracja WiFi z portalem AP (`WiFiManager`) zamiast hardcode.
-- Efekty: odliczanie startu, blysk zwyciezcy, animowany zbior "wygrala odpowiedz".
 - Autoryzacja panelu (proste haslo w headerze) — inaczej ktokolwiek w sieci zmieni scene.
-- Ekran dla widowni na osobnym urzadzeniu (drugi wariant frontu).
+- Efekty animowane w LEDach: odliczanie, blysk zwyciezcy, animacja odpadania.
+- Portal AP (`WiFiManager`) do konfiguracji WiFi bez rekompilacji ESP.
+- Historia gier: eksport CSV / PDF, statystyki sezonu.
+- Reset rundy z UI (obecnie DB nie kasuje zapisow — wystarczy usunac `data.db` na czysty stan).

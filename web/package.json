@@ -1,8 +1,12 @@
 {
   "name": "1z9-web",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
+  "description": "",
+  "license": "ISC",
+  "author": "Michał_Jaksan",
   "type": "module",
+  "main": "vite.config.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -10,7 +14,8 @@
   },
   "dependencies": {
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
