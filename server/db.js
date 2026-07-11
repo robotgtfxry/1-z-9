@@ -67,6 +67,8 @@ export function openDb(path) {
   try { db.exec(`ALTER TABLE seats ADD COLUMN lives INTEGER NOT NULL DEFAULT 3`) } catch {}
   // Migracja: kolor per stanowisko
   try { db.exec(`ALTER TABLE seats ADD COLUMN color TEXT NOT NULL DEFAULT '#e05252'`) } catch {}
+  // Migracja: punkty w rundzie 2 (0..3, sterowane zbieraniem punktow, rosna w gore)
+  try { db.exec(`ALTER TABLE seats ADD COLUMN points INTEGER NOT NULL DEFAULT 0`) } catch {}
   // Migracja: powiazanie wyniku R2 z pytaniem
   try { db.exec(`ALTER TABLE round2_results ADD COLUMN question_id INTEGER REFERENCES questions(id) ON DELETE SET NULL`) } catch {}
   // Migracja: kolejnosc pytan w banku

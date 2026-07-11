@@ -57,11 +57,17 @@ export const api = {
   setSeat:     (seat, userId) => j('POST', `/api/seats/${seat}`, { userId }),
   resetSeats:  () => j('POST', '/api/seats/reset'),
 
-  // zycia
+  // zycia (R1)
   addLife:     (seat) => j('POST', `/api/seats/${seat}/lives`, { delta:  1 }),
   loseLife:    (seat) => j('POST', `/api/seats/${seat}/lives`, { delta: -1 }),
   setLives:    (seat, value) => j('POST', `/api/seats/${seat}/lives`, { value }),
   resetLives:  ()     => j('POST', '/api/lives/reset'),
+
+  // punkty (R2)
+  addPoint:    (seat) => j('POST', `/api/seats/${seat}/points`, { delta:  1 }),
+  losePoint:   (seat) => j('POST', `/api/seats/${seat}/points`, { delta: -1 }),
+  setPoints:   (seat, value) => j('POST', `/api/seats/${seat}/points`, { value }),
+  resetPoints: ()     => j('POST', '/api/points/reset'),
 
   // kolor stanowiska (jeden na siedzenie, zycia sterują sektorami)
   setSeatColor:(seat, color) => j('POST', `/api/seats/${seat}/color`, { color }),
@@ -87,6 +93,9 @@ export const api = {
   // runda 2
   round2Start: () => j('POST', '/api/round2/start'),
   round2Stop:  () => j('POST', '/api/round2/stop'),
+  markCorrect: () => j('POST', '/api/round2/mark', { verdict: 'correct' }),
+  markWrong:   () => j('POST', '/api/round2/mark', { verdict: 'wrong' }),
+  resetVerdicts: () => j('POST', '/api/round2/reset-verdicts'),
 
   // pytania - bank
   questions:   ()          => j('GET',    '/api/questions'),
@@ -97,8 +106,9 @@ export const api = {
   importQuestions: (questions) => j('POST', '/api/questions/import', { questions }),
 
   // nawigacja: nastepne/poprzednie z banku (opcjonalnie zawezone do rundy)
-  nextQuestion: (round) => j('POST', `/api/question/next${round ? `?round=${round}` : ''}`),
-  prevQuestion: (round) => j('POST', `/api/question/prev${round ? `?round=${round}` : ''}`),
+  nextQuestion: () => j('POST', '/api/question/next'),
+  prevQuestion: () => j('POST', '/api/question/prev'),
+  setRound:     (round) => j('POST', '/api/round/set', { round }),
 
   // pytania - aktualne
   setQuestion: (text, answer, round, showAnswer = false) => j('POST', '/api/question', { text, answer, round, showAnswer }),

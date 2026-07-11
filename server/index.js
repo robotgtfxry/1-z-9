@@ -13,7 +13,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
-import { SOUNDS } from './sounds.js'
+import { loadSounds, getSoundPath, setSoundsConfigPath } from './sounds.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -23,6 +23,8 @@ const DB_PATH   = process.env.DB_PATH   || './data.db'
 const POLL_MS   = 300
 const PASSWORD  = process.env.OPERATOR_PASSWORD || 'admin'   // <- zmien w .env
 const ESP_TOKEN = process.env.ESP_API_TOKEN || '1z9-esp-token'   // musi zgadzac sie z API_TOKEN w ESP
+const SOUNDS_CONFIG = process.env.SOUNDS_CONFIG || path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sounds.json')
+setSoundsConfigPath(SOUNDS_CONFIG)
 
 const db = openDb(DB_PATH)
 const app = express()
@@ -51,15 +53,18 @@ const stmt = {
   deleteAllUsers: db.prepare(`DELETE FROM users`),
 
   getSeats:       db.prepare(`
-    SELECT s.seat, u.id AS user_id, u.name, s.lives, s.color
+    SELECT s.seat, u.id AS user_id, u.name, s.lives, s.color, s.points
     FROM seats s LEFT JOIN users u ON u.id = s.user_id
     ORDER BY s.seat`),
-  setSeat:        db.prepare(`UPDATE seats SET user_id = ?, lives = 3 WHERE seat = ?`),
+  setSeat:        db.prepare(`UPDATE seats SET user_id = ?, lives = 3, points = 0 WHERE seat = ?`),
   clearSeatByUser:db.prepare(`UPDATE seats   SET user_id = NULL WHERE user_id = ?`),
-  clearAllSeats:  db.prepare(`UPDATE seats   SET user_id = NULL, lives = 3`),
+  clearAllSeats:  db.prepare(`UPDATE seats   SET user_id = NULL, lives = 3, points = 0`),
   setLives:       db.prepare(`UPDATE seats SET lives = MAX(0, MIN(3, ?)) WHERE seat = ?`),
   resetAllLives:  db.prepare(`UPDATE seats SET lives = 3`),
   setColor:       db.prepare(`UPDATE seats SET color = ? WHERE seat = ?`),
+  setPoints:      db.prepare(`UPDATE seats SET points = MAX(0, ?) WHERE seat = ?`),
+  resetAllPoints: db.prepare(`UPDATE seats SET points = 0`),
+  seatByUser:     db.prepare(`SELECT seat FROM seats WHERE user_id = ?`),
 
   getButtons:     db.prepare(`
     SELECT b.button, u.id AS user_id, u.name
@@ -127,6 +132,14 @@ let recordedEventIds = new Set() // ktore eventy juz zapisalismy w tej rundzie
 let round2WasActive = false
 const sseClients = new Set()
 
+// Verdykty rundy 2: klucz `${buttonId}:${t}` -> 'correct' | 'wrong'
+// Zerowany gdy: pytanie sie zmieni, ROUND2 sie restartuje, albo manualny reset.
+let r2Verdicts = new Map()
+let lastQuestionKey = ''
+
+// Aktualnie wybrany zakres pytan dla prev/next. 1 = runda 1, 2 = runda 2.
+let activeRound = 1
+
 // ---------- Helpery ----------
 async function fetchEsp(path, opts = {}) {
   const headers = { ...(opts.headers || {}), 'X-Api-Token': ESP_TOKEN }
@@ -153,11 +166,14 @@ async function espPost(path, body) {
   } catch (e) { /* ESP moze byc chwilowo offline */ }
 }
 
-// Zycia = ilosc swiecacych sektorow. Kolor = kolor stanowiska.
+// LEDy zawsze pokazuja ZYCIA. W R2 tylko finalisci widoczni - nie-finalisci maja panel wygaszony.
+// Punkty to osobny licznik, nie wplywaja na LEDy.
 async function syncSeatLeds(seat) {
   const s = stmt.getSeats.all().find(x => x.seat === seat)
   if (!s) return
-  const active = s.user_id ? (s.lives ?? 0) : 0
+  const isFinalist = s.user_id && stmt.getButtons.all().some(b => b.user_id === s.user_id)
+  const isEligible = activeRound === 2 ? isFinalist : !!s.user_id
+  const active = isEligible ? (s.lives ?? 0) : 0
   const { r, g, b } = hexToRgb(s.color || '#e05252')
   if (active === 3) return espPost('/api/panel', { panel: seat, on: true, r, g, b })
   if (active === 0) return espPost('/api/panel', { panel: seat, on: false, r, g, b })
@@ -237,8 +253,17 @@ async function pollLoop() {
 
     if (espState.round2 && !round2WasActive) {
       recordedEventIds.clear()
+      r2Verdicts.clear()
     }
     round2WasActive = !!espState.round2
+
+    // Wykryj zmiane pytania -> wyzeruj verdykty
+    const cur = stmt.getCurrent.get()
+    const qKey = `${cur?.question_id || 0}:${cur?.updated_at || 0}`
+    if (qKey !== lastQuestionKey) {
+      lastQuestionKey = qKey
+      r2Verdicts.clear()
+    }
 
     if (espState.round2) recordNewEvents()
 
@@ -327,6 +352,25 @@ app.post('/api/seats/:seat/lives', requireAuth, async (req, res) => {
 })
 
 app.post('/api/lives/reset', requireAuth, async (_, res) => { stmt.resetAllLives.run(); syncAllSeats(); res.json({ ok: true }) })
+
+// Punkty w rundzie 2 (0..3, ida w gore). Sync tego samego panelu co lives, ale przez syncSeatLeds
+// automatycznie wybiera lives/points w zaleznosci od activeRound.
+app.post('/api/seats/:seat/points', requireAuth, async (req, res) => {
+  const seat = Number(req.params.seat)
+  if (seat < 0 || seat > 8) return res.status(400).json({ err: 'range' })
+  const cur = stmt.getSeats.all().find(s => s.seat === seat)
+  const delta = req.body?.delta
+  const value = req.body?.value
+  let next = cur?.points ?? 0
+  if (typeof delta === 'number') next = next + delta
+  else if (typeof value === 'number') next = value
+  else return res.status(400).json({ err: 'delta or value required' })
+  stmt.setPoints.run(next, seat)
+  syncSeatLeds(seat)
+  res.json({ ok: true })
+})
+
+app.post('/api/points/reset', requireAuth, async (_, res) => { stmt.resetAllPoints.run(); syncAllSeats(); res.json({ ok: true }) })
 
 // Pelny reset gry: uzytkownicy, siedzenia, przyciski, pytanie, ledy, runda 2 stop.
 // Nie ruszamy: banku pytan, historii round2_results (user_id historycznych wynikow idzie NULL przez FK).
@@ -468,17 +512,29 @@ function stepQuestion(dir, round) {
   return stmt.getCurrent.get()
 }
 
-app.post('/api/question/next', requireAuth, (req, res) => {
-  const round = [1, 2].includes(+req.query.round) ? +req.query.round : null
-  const q = stepQuestion('next', round)
+app.post('/api/question/next', requireAuth, (_, res) => {
+  const q = stepQuestion('next', activeRound)
   if (!q) return res.status(404).json({ err: 'no questions' })
   res.json(q)
 })
-app.post('/api/question/prev', requireAuth, (req, res) => {
-  const round = [1, 2].includes(+req.query.round) ? +req.query.round : null
-  const q = stepQuestion('prev', round)
+app.post('/api/question/prev', requireAuth, (_, res) => {
+  const q = stepQuestion('prev', activeRound)
   if (!q) return res.status(404).json({ err: 'no questions' })
   res.json(q)
+})
+
+// Przelacznik aktualnej rundy. Zerowanie pytania -> home screen na prezentacji.
+// Sync LEDow bo semantyka co swiecic zmienia sie miedzy R1 i R2.
+app.post('/api/round/set', requireAuth, async (req, res) => {
+  const round = +req.body?.round
+  if (round !== 1 && round !== 2) return res.status(400).json({ err: 'round must be 1 or 2' })
+  if (round !== activeRound) {
+    activeRound = round
+    stmt.clearCurrent.run(Date.now())
+    r2Verdicts.clear()
+    await syncAllSeats()
+  }
+  res.json({ ok: true, activeRound })
 })
 
 // ---------- API: stan (ESP + DB) ----------
@@ -492,7 +548,13 @@ app.get('/api/state', (_, res) => {
     t: e.t,
     position: positions.get(e.id) ?? null,
     userName: btnUser.get(e.id)?.name || null,
+    verdict: r2Verdicts.get(`${e.id}:${e.t}`) || null,
   })).sort((a, b) => a.t - b.t)
+
+  // "Aktualny odpowiadajacy" = pierwsze zdarzenie ktore nie zostalo oznaczone jako 'wrong'
+  // i nie ma juz 'correct' (bo wtedy pytanie zakonczone)
+  const anyCorrect = events.some(e => e.verdict === 'correct')
+  const currentAnswerer = anyCorrect ? null : (events.find(e => e.verdict !== 'wrong') || null)
 
   const q = stmt.getCurrent.get()
   const question = {
@@ -512,8 +574,43 @@ app.get('/api/state', (_, res) => {
     seats,
     buttons,
     events,
+    currentAnswerer,
     question,
+    activeRound,
   })
+})
+
+// Operator oznacza aktualnego odpowiadajacego jako poprawnego lub blednego.
+// Wrong -> nastepny buzzer staje sie "current answerer".
+// Correct -> pytanie zakonczone (wszyscy pozostali sa bez werdyktu, ale currentAnswerer = null)
+app.post('/api/round2/mark', requireAuth, async (req, res) => {
+  const verdict = req.body?.verdict
+  if (verdict !== 'correct' && verdict !== 'wrong') return res.status(400).json({ err: 'verdict must be correct|wrong' })
+  const events = [...(espState?.events || [])].sort((a, b) => a.t - b.t)
+  const anyCorrect = events.some(e => r2Verdicts.get(`${e.id}:${e.t}`) === 'correct')
+  if (anyCorrect) return res.status(400).json({ err: 'question already answered correctly' })
+  const cur = events.find(e => r2Verdicts.get(`${e.id}:${e.t}`) !== 'wrong')
+  if (!cur) return res.status(400).json({ err: 'no answerer' })
+  r2Verdicts.set(`${cur.id}:${cur.t}`, verdict)
+
+  // Auto-bump punkt na siedzeniu wygrywajacego
+  if (verdict === 'correct') {
+    const btn = stmt.getButtons.all().find(b => b.button === cur.id)
+    if (btn?.user_id) {
+      const seat = stmt.seatByUser.get(btn.user_id)?.seat
+      if (seat != null) {
+        const s = stmt.getSeats.all().find(x => x.seat === seat)
+        stmt.setPoints.run((s?.points ?? 0) + 1, seat)
+        await syncSeatLeds(seat)
+      }
+    }
+  }
+  res.json({ ok: true })
+})
+
+app.post('/api/round2/reset-verdicts', requireAuth, (_, res) => {
+  r2Verdicts.clear()
+  res.json({ ok: true })
 })
 
 // ---------- SSE ----------
@@ -546,14 +643,24 @@ app.post('/api/round2/start', requireAuth, async (_, res) => { try { res.json(aw
 app.post('/api/round2/stop',  requireAuth, async (_, res) => { try { res.json(await proxyPost('/api/round2/stop'))  } catch (e) { res.status(502).json({ err: e.message }) } })
 
 // ---------- Dzwieki (broadcast SSE) ----------
-app.get('/api/sounds', (_, res) => res.json(SOUNDS))
+app.get('/api/sounds', (_, res) => res.json(loadSounds()))
 
 app.post('/api/sound/play', requireAuth, (req, res) => {
   const id = String(req.body?.id || '')
-  const s = SOUNDS.find(x => x.id === id)
-  if (!s) return res.status(404).json({ err: 'notfound' })
-  sseSend('sound', { id: s.id, file: s.file, ts: Date.now() })
+  const s = loadSounds().find(x => x.id === id)
+  if (!s || !s.present) return res.status(404).json({ err: 'notfound' })
+  sseSend('sound', { id: s.id, slot: s.slot, ts: Date.now() })
   res.json({ ok: true })
+})
+
+// Streamowanie pliku dzwiekowego. URL: /sound/:slot (1..9).
+// Publiczny (bez autoryzacji), zeby prezentacja/wyniki mogly preladowac.
+app.get('/sound/:slot', (req, res) => {
+  const slot = Number(req.params.slot)
+  if (!Number.isInteger(slot) || slot < 1 || slot > 9) return res.status(400).end()
+  const p = getSoundPath(slot)
+  if (!p) return res.status(404).end()
+  res.sendFile(p)
 })
 
 app.post('/api/sound/stop', requireAuth, (_, res) => {

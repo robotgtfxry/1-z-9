@@ -2,37 +2,45 @@ import { useEffect, useRef, useState } from 'react'
 import { api, SSE_URL } from '../api'
 
 // Globalny odtwarzacz. Montowany raz w App.jsx.
-// - Fetchuje liste dzwiekow z /api/sounds
-// - Preladowuje kazdy plik (Audio z preload='auto')
+// - Fetchuje /api/sounds (9 slotow z present true/false)
+// - Preladowuje audio dla slotow z present=true (URL: /sound/:slot)
 // - Sluchacz SSE 'sound' -> odtwarza natychmiast
-// - Autoplay policy: przegladarka nie zagra bez user gesture.
-//   Pokazuje overlay "kliknij aby wlaczyc" dopoki nie odblokowane.
 
 export default function SoundPlayer() {
   const audiosRef = useRef({})     // { id: HTMLAudioElement }
   const [needsUnlock, setNeedsUnlock] = useState(true)
-  const [flash, setFlash] = useState(null)  // { id, label }
+  const [flash, setFlash] = useState(null)
 
-  // Preload wszystkich dzwiekow
+  // Preload (odswiezany co 5 s bo Tkinter moze podmienic sloty)
   useEffect(() => {
     let alive = true
-    api.sounds().then(list => {
-      if (!alive) return
-      const map = {}
-      for (const s of list) {
-        const a = new Audio(`/sounds/${s.file}`)
-        a.preload = 'auto'
-        a.crossOrigin = 'anonymous'
-        a.load()
-        a.dataset.label = s.label
-        map[s.id] = a
-      }
-      audiosRef.current = map
-    }).catch(() => {})
-    return () => { alive = false }
+    const load = () => {
+      api.sounds().then(list => {
+        if (!alive) return
+        const cur = audiosRef.current
+        // usun stare
+        for (const key of Object.keys(cur)) {
+          if (!list.find(s => s.id === key && s.present)) delete cur[key]
+        }
+        // dodaj nowe
+        for (const s of list) {
+          if (!s.present) continue
+          if (!cur[s.id]) {
+            const a = new Audio(`/sound/${s.slot}`)
+            a.preload = 'auto'
+            a.crossOrigin = 'anonymous'
+            a.load()
+            cur[s.id] = a
+          }
+        }
+      }).catch(() => {})
+    }
+    load()
+    const t = setInterval(load, 5000)
+    return () => { alive = false; clearInterval(t) }
   }, [])
 
-  // SSE: nasluch eventu 'sound'
+  // SSE
   useEffect(() => {
     const es = new EventSource(SSE_URL)
     const onSound = (e) => {
@@ -42,8 +50,8 @@ export default function SoundPlayer() {
         if (!a) return
         a.currentTime = 0
         a.play().catch(() => setNeedsUnlock(true))
-        setFlash({ id, label: a.dataset.label })
-        setTimeout(() => setFlash(null), 1400)
+        setFlash({ id })
+        setTimeout(() => setFlash(null), 1200)
       } catch {}
     }
     const onStop = () => {
@@ -54,7 +62,6 @@ export default function SoundPlayer() {
     return () => { es.removeEventListener('sound', onSound); es.removeEventListener('sound-stop', onStop); es.close() }
   }, [])
 
-  // Odblokowanie audio na pierwszy user gesture
   const unlock = () => {
     const promises = Object.values(audiosRef.current).map(a => {
       a.muted = true
@@ -66,14 +73,13 @@ export default function SoundPlayer() {
   return (
     <>
       {needsUnlock && (
-        <button className="sound-unlock" onClick={unlock}
-                title="Kliknij aby zezwolic przegladarce na odtwarzanie dzwiekow">
+        <button className="sound-unlock" onClick={unlock}>
           Kliknij, aby wlaczyc dzwieki
         </button>
       )}
       {flash && (
         <div className="sound-flash" aria-live="polite">
-          <span className="sound-flash-dot" /> {flash.label}
+          <span className="sound-flash-dot" /> Dzwiek {flash.id}
         </div>
       )}
     </>

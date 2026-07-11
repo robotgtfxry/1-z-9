@@ -21,6 +21,7 @@ Uruchomienie z zrodel:
 Zbudowanie do .exe: patrz build.bat.
 """
 
+import json
 import os
 import queue
 import shutil
@@ -31,7 +32,7 @@ import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
-from tkinter import messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext
 
 # ---------------- Sciezki ----------------
 
@@ -56,7 +57,9 @@ SERVER_DIR = RES_DIR / "server"
 WEB_DIST   = RES_DIR / "web" / "dist"
 BUNDLED_NODE = RES_DIR / "node" / "node.exe"
 DB_PATH = APP_DIR / "data.db"     # persystentnie obok launchera
+SOUNDS_JSON = APP_DIR / "sounds.json"  # konfiguracja slotow dzwiekowych
 DEFAULT_PORT = 4000
+AUDIO_EXTS = [("Pliki dzwiekowe", "*.mp3 *.wav *.ogg *.m4a *.flac"), ("Wszystkie pliki", "*.*")]
 
 # ---------------- Node & sieć ----------------
 
@@ -143,6 +146,9 @@ class App:
                                    bg="#23242e", fg="#8b8ea0", relief="flat", padx=10, pady=8)
         self.clear_btn.pack(side="right", padx=4)
 
+        # ---- Sloty dzwiekow (9x) ----
+        self._build_sounds_ui()
+
         # ---- Log ----
         log_frame = tk.Frame(self.root, bg="#0d0e12", padx=14, pady=8)
         log_frame.pack(fill="both", expand=True)
@@ -155,6 +161,79 @@ class App:
         )
         self.log.pack(fill="both", expand=True, pady=(4, 0))
         self.log.configure(state="disabled")
+
+    # ---------------- Sloty dzwiekow ----------------
+
+    def _load_sound_config(self) -> dict:
+        if SOUNDS_JSON.exists():
+            try:
+                return json.loads(SOUNDS_JSON.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {"slots": {}}
+
+    def _save_sound_config(self, cfg: dict):
+        SOUNDS_JSON.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def _build_sounds_ui(self):
+        wrap = tk.Frame(self.root, bg="#0d0e12", padx=14, pady=6)
+        wrap.pack(fill="x")
+        tk.Label(wrap, text="Sloty dzwiekow (1..9) — kliknij Wybierz, aby wskazac plik mp3/wav",
+                 bg="#0d0e12", fg="#8b8ea0", anchor="w", font=("Segoe UI", 9)).pack(fill="x", pady=(4, 6))
+
+        grid = tk.Frame(wrap, bg="#1a1b23")
+        grid.pack(fill="x", padx=0)
+
+        self.slot_vars: dict[str, tk.StringVar] = {}
+        cfg = self._load_sound_config()
+        slots = cfg.get("slots", {}) or {}
+
+        for i in range(9):
+            key = str(i + 1)
+            row = tk.Frame(grid, bg="#1a1b23")
+            row.pack(fill="x", padx=6, pady=2)
+
+            tk.Label(row, text=key, bg="#23242e", fg="#eaeaf0",
+                     font=("Segoe UI", 11, "bold"),
+                     width=2, relief="flat").pack(side="left", padx=(0, 8), ipady=3)
+
+            var = tk.StringVar(value=slots.get(key) or "")
+            self.slot_vars[key] = var
+            entry = tk.Entry(row, textvariable=var, bg="#23242e", fg="#eaeaf0",
+                             relief="flat", font=("Consolas", 9),
+                             readonlybackground="#23242e", state="readonly")
+            entry.pack(side="left", fill="x", expand=True, ipady=3)
+
+            tk.Button(row, text="Wybierz", bg="#23242e", fg="#eaeaf0",
+                      relief="flat", padx=8,
+                      command=lambda k=key: self._pick_slot(k)).pack(side="left", padx=4)
+            tk.Button(row, text="Wyczysc", bg="#23242e", fg="#8b8ea0",
+                      relief="flat", padx=8,
+                      command=lambda k=key: self._clear_slot(k)).pack(side="left")
+
+    def _pick_slot(self, key: str):
+        cur = self.slot_vars[key].get() or str(APP_DIR)
+        f = filedialog.askopenfilename(
+            title=f"Wybierz plik dla slotu {key}",
+            initialdir=str(Path(cur).parent) if cur and Path(cur).parent.exists() else str(APP_DIR),
+            filetypes=AUDIO_EXTS,
+        )
+        if not f:
+            return
+        self.slot_vars[key].set(f)
+        self._save_current_slots()
+
+    def _clear_slot(self, key: str):
+        self.slot_vars[key].set("")
+        self._save_current_slots()
+
+    def _save_current_slots(self):
+        cfg = {"slots": {k: (v.get() or None) for k, v in self.slot_vars.items()}}
+        try:
+            self._save_sound_config(cfg)
+            self.add_log(f"[launcher] Zapisano sloty do {SOUNDS_JSON.name}\n")
+        except Exception as e:
+            messagebox.showerror("Zapis slotow", str(e))
 
     # ---------------- Log queue ----------------
 
@@ -199,6 +278,7 @@ class App:
         env["PORT"] = str(self.port)
         env["DB_PATH"] = str(DB_PATH)
         env["WEB_DIST"] = str(WEB_DIST)
+        env["SOUNDS_CONFIG"] = str(SOUNDS_JSON)
 
         args = [node, "--experimental-sqlite", "--env-file-if-exists=.env", "index.js"]
 
