@@ -9,8 +9,13 @@
 
 import express from 'express'
 import cors from 'cors'
+import path from 'node:path'
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { openDb } from './db.js'
 import { SOUNDS } from './sounds.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const ESP_URL   = process.env.ESP_URL   || 'http://192.168.1.50'
 const PORT      = Number(process.env.PORT) || 4000
@@ -43,6 +48,7 @@ const stmt = {
   getUser:        db.prepare(`SELECT * FROM users WHERE id = ?`),
   insertUser:     db.prepare(`INSERT INTO users (name, created_at) VALUES (?, ?)`),
   deleteUser:     db.prepare(`DELETE FROM users WHERE id = ?`),
+  deleteAllUsers: db.prepare(`DELETE FROM users`),
 
   getSeats:       db.prepare(`
     SELECT s.seat, u.id AS user_id, u.name, s.lives, s.color
@@ -64,8 +70,8 @@ const stmt = {
   clearAllButtons:db.prepare(`UPDATE buttons SET user_id = NULL`),
 
   insertResult:   db.prepare(`
-    INSERT INTO round2_results (user_id, button_id, reaction_ms, position, ts)
-    VALUES (?, ?, ?, ?, ?)`),
+    INSERT INTO round2_results (user_id, button_id, reaction_ms, position, ts, question_id)
+    VALUES (?, ?, ?, ?, ?, ?)`),
 
   bumpGames:      db.prepare(`UPDATE users SET games_played = games_played + 1 WHERE id = ?`),
   bumpWin:        db.prepare(`UPDATE users SET wins = wins + 1 WHERE id = ?`),
@@ -88,12 +94,15 @@ const stmt = {
     ORDER BY r.ts DESC LIMIT ?`),
 
   // --- pytania ---
-  listQuestions:  db.prepare(`SELECT * FROM questions ORDER BY id DESC`),
+  listQuestions:  db.prepare(`SELECT * FROM questions ORDER BY sort_order ASC, id ASC`),
   getQuestion:    db.prepare(`SELECT * FROM questions WHERE id = ?`),
-  insertQuestion: db.prepare(`INSERT INTO questions (text, answer, round, created_at) VALUES (?, ?, ?, ?)`),
+  insertQuestion: db.prepare(`INSERT INTO questions (text, answer, round, created_at, sort_order) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order)+1, 0) FROM questions))`),
+  insertQuestionAt: db.prepare(`INSERT INTO questions (text, answer, round, created_at, sort_order) VALUES (?, ?, ?, ?, ?)`),
+  maxSortOrder:   db.prepare(`SELECT COALESCE(MAX(sort_order)+1, 0) AS next FROM questions`),
   updateQuestion: db.prepare(`UPDATE questions SET text = ?, answer = ?, round = ? WHERE id = ?`),
   deleteQuestion: db.prepare(`DELETE FROM questions WHERE id = ?`),
   markUsed:       db.prepare(`UPDATE questions SET used = used + 1 WHERE id = ?`),
+  setSortOrder:   db.prepare(`UPDATE questions SET sort_order = ? WHERE id = ?`),
 
   getCurrent:     db.prepare(`SELECT * FROM current_question WHERE id = 1`),
   setCurrentByQ:  db.prepare(`
@@ -190,6 +199,9 @@ function recordNewEvents() {
   const btnRows = stmt.getButtons.all()
   const btnUser = new Map(btnRows.map(r => [r.button, r.user_id]))
   const now = Date.now()
+  // Wiaz wynik z aktualnym pytaniem (jesli jest w banku - questionId != NULL)
+  const cur = stmt.getCurrent.get()
+  const questionId = cur?.question_id ?? null
 
   db.exec('BEGIN')
   try {
@@ -199,7 +211,7 @@ function recordNewEvents() {
       recordedEventIds.add(key)
       const userId = btnUser.get(e.id) ?? null
       const position = positions.get(e.id) ?? 1
-      stmt.insertResult.run(userId, e.id, e.t, position, now)
+      stmt.insertResult.run(userId, e.id, e.t, position, now, questionId)
       if (userId) {
         stmt.bumpGames.run(userId)
         if (position === 1) stmt.bumpWin.run(userId)
@@ -316,6 +328,20 @@ app.post('/api/seats/:seat/lives', requireAuth, async (req, res) => {
 
 app.post('/api/lives/reset', requireAuth, async (_, res) => { stmt.resetAllLives.run(); syncAllSeats(); res.json({ ok: true }) })
 
+// Pelny reset gry: uzytkownicy, siedzenia, przyciski, pytanie, ledy, runda 2 stop.
+// Nie ruszamy: banku pytan, historii round2_results (user_id historycznych wynikow idzie NULL przez FK).
+app.post('/api/reset-game', requireAuth, async (_, res) => {
+  stmt.clearAllSeats.run()
+  stmt.clearAllButtons.run()
+  stmt.deleteAllUsers.run()          // FK ustawia round2_results.user_id -> NULL
+  stmt.clearCurrent.run(Date.now())
+  recordedEventIds.clear()
+  espPost('/api/round2/stop')
+  espPost('/api/offall')
+  await syncAllSeats()
+  res.json({ ok: true })
+})
+
 // ---------- API: wyniki / leaderboard ----------
 app.get('/api/leaderboard', (_, res) => res.json(stmt.leaderboard.all()))
 app.get('/api/results/recent', (req, res) =>
@@ -349,6 +375,49 @@ app.delete('/api/questions/:id', requireAuth, (req, res) => {
   res.json({ ok: true })
 })
 
+// Import pytan z JSON. Nie kasuje istniejacych - dopisuje na koniec listy.
+// Kolejnosc: jesli item ma pole `order`, uzywamy go (offsetowane o MAX istniejacego sort_order).
+// W przeciwnym razie stosujemy pozycje w tablicy (0, 1, 2, ...).
+app.post('/api/questions/import', requireAuth, (req, res) => {
+  const items = Array.isArray(req.body?.questions) ? req.body.questions : null
+  if (!items) return res.status(400).json({ err: 'questions array required' })
+  const base = stmt.maxSortOrder.get()?.next ?? 0
+  let added = 0, skipped = 0
+  db.exec('BEGIN')
+  try {
+    items.forEach((it, i) => {
+      const text = String(it?.text || '').trim()
+      const answer = it?.answer ? String(it.answer).trim() : null
+      const round = [1, 2].includes(+it?.round) ? +it.round : 1
+      const orderRaw = Number.isFinite(+it?.order) ? +it.order : i
+      const sortOrder = base + orderRaw
+      if (!text) { skipped++; return }
+      stmt.insertQuestionAt.run(text, answer, round, Date.now(), sortOrder)
+      added++
+    })
+    db.exec('COMMIT')
+  } catch (e) {
+    try { db.exec('ROLLBACK') } catch {}
+    return res.status(500).json({ err: e.message })
+  }
+  res.json({ ok: true, added, skipped })
+})
+
+// Ustaw nowa kolejnosc pytan w banku (frontend przekazuje pelna liste id od gory do dolu)
+app.post('/api/questions/reorder', requireAuth, (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number) : null
+  if (!ids || !ids.length) return res.status(400).json({ err: 'ids required' })
+  db.exec('BEGIN')
+  try {
+    ids.forEach((id, i) => stmt.setSortOrder.run(i, id))
+    db.exec('COMMIT')
+  } catch (e) {
+    try { db.exec('ROLLBACK') } catch {}
+    return res.status(500).json({ err: e.message })
+  }
+  res.json({ ok: true })
+})
+
 // aktualne pytanie
 app.get('/api/question', (_, res) => res.json(stmt.getCurrent.get()))
 
@@ -379,6 +448,37 @@ app.post('/api/question/reveal', requireAuth, (req, res) => {
 app.post('/api/question/clear', requireAuth, (_, res) => {
   stmt.clearCurrent.run(Date.now())
   res.json(stmt.getCurrent.get())
+})
+
+// Nastepne / poprzednie pytanie z banku (zgodnie z sort_order).
+// round=1|2 -> zawez do pytan tej rundy; null -> wszystkie.
+// Jesli nie ma aktualnego, wybiera pierwsze/ostatnie odpowiednio.
+function stepQuestion(dir, round) {
+  let list = stmt.listQuestions.all()
+  if (round === 1 || round === 2) list = list.filter(q => q.round === round)
+  if (!list.length) return null
+  const cur = stmt.getCurrent.get()
+  const curId = cur?.question_id
+  let idx = curId ? list.findIndex(q => q.id === curId) : -1
+  if (dir === 'next') idx = idx < 0 ? 0 : Math.min(idx + 1, list.length - 1)
+  else                idx = idx < 0 ? list.length - 1 : Math.max(idx - 1, 0)
+  const q = list[idx]
+  stmt.setCurrentByQ.run(q.id, q.text, q.answer, q.round, Date.now())
+  stmt.markUsed.run(q.id)
+  return stmt.getCurrent.get()
+}
+
+app.post('/api/question/next', requireAuth, (req, res) => {
+  const round = [1, 2].includes(+req.query.round) ? +req.query.round : null
+  const q = stepQuestion('next', round)
+  if (!q) return res.status(404).json({ err: 'no questions' })
+  res.json(q)
+})
+app.post('/api/question/prev', requireAuth, (req, res) => {
+  const round = [1, 2].includes(+req.query.round) ? +req.query.round : null
+  const q = stepQuestion('prev', round)
+  if (!q) return res.status(404).json({ err: 'no questions' })
+  res.json(q)
 })
 
 // ---------- API: stan (ESP + DB) ----------
@@ -461,9 +561,20 @@ app.post('/api/sound/stop', requireAuth, (_, res) => {
   res.json({ ok: true })
 })
 
+// ---------- Serwowanie zbudowanego frontendu (opcjonalne) ----------
+// Jesli obok server/ jest wybudowany web/dist/, backend go serwuje.
+// Uzywane przez launcher .exe - user otwiera http://<lan-ip>:4000 i dostaje calosc.
+const DIST = process.env.WEB_DIST || path.resolve(__dirname, '..', 'web', 'dist')
+if (fs.existsSync(DIST)) {
+  app.use(express.static(DIST))
+  // SPA fallback: kazda sciezka spoza /api/* -> index.html
+  app.get(/^\/(?!api\/).*/, (_, res) => res.sendFile(path.join(DIST, 'index.html')))
+  console.log(`[server] Frontend serwowany z ${DIST}`)
+}
+
 // ---------- Start ----------
 app.listen(PORT, () => {
-  console.log(`[server] http://localhost:${PORT}`)
+  console.log(`[server] http://0.0.0.0:${PORT}`)
   console.log(`[server] ESP: ${ESP_URL}`)
   console.log(`[server] DB : ${DB_PATH}`)
 })

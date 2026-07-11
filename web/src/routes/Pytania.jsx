@@ -1,14 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, subscribeState } from '../api'
 
-// Bank pytan. Operator moze przygotowac liste przed gra i podczas trwania
-// jednym kliknieciem ustawiac aktualne pytanie w prezentacji.
+// Bank pytan. Kolejnosc reguluje operator drag-and-dropem po uchwycie z lewej.
+// Kolejnosc gora->dol odpowiada temu, w jakiej kolejnosci "Nastepne" pytanie
+// bedzie pojawiac sie na prezentacji.
 
 export default function Pytania() {
   const [items, setItems] = useState([])
   const [current, setCurrent] = useState(null)
   const [form, setForm] = useState({ text: '', answer: '', round: 1 })
   const [err, setErr] = useState(null)
+  const [dragId, setDragId] = useState(null)
+  const [overId, setOverId] = useState(null)
+  const dragging = useRef(false)
 
   const refresh = async () => {
     try {
@@ -37,6 +41,72 @@ export default function Pytania() {
     const round = +(prompt('Runda (1/2):', q.round) || q.round)
     await api.editQuestion(q.id, { text, answer, round }); refresh()
   }
+
+  // ---- EXPORT / IMPORT JSON ----
+  const exportJson = () => {
+    const data = {
+      exported_at: new Date().toISOString(),
+      version: 1,
+      questions: items.map((q, i) => ({ order: i, round: q.round, text: q.text, answer: q.answer })),
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    a.href = url; a.download = `1z9-pytania-${stamp}.json`
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  const importJson = async (file) => {
+    if (!file) return
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      const list = Array.isArray(parsed) ? parsed
+                 : Array.isArray(parsed.questions) ? parsed.questions
+                 : null
+      if (!list) { setErr('Zły format — oczekuje tablicy albo { questions: [...] }'); return }
+      const r = await api.importQuestions(list)
+      setErr(null)
+      alert(`Import: dodano ${r.added}, pominieto ${r.skipped}`)
+      refresh()
+    } catch (e) { setErr(`Import: ${e.message}`) }
+  }
+  const onImportFile = (e) => {
+    const f = e.target.files?.[0]
+    e.target.value = ''      // reset — pozwala reimport tego samego pliku
+    importJson(f)
+  }
+
+  // ---- DRAG & DROP ----
+  const onDragStart = (id) => (e) => {
+    dragging.current = true
+    setDragId(id)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', String(id))
+  }
+  const onDragOver = (id) => (e) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (overId !== id) setOverId(id)
+  }
+  const onDrop = (targetId) => async (e) => {
+    e.preventDefault()
+    const srcId = dragId ?? Number(e.dataTransfer.getData('text/plain'))
+    setDragId(null); setOverId(null); dragging.current = false
+    if (!srcId || srcId === targetId) return
+    const src = items.findIndex(x => x.id === srcId)
+    const dst = items.findIndex(x => x.id === targetId)
+    if (src < 0 || dst < 0) return
+    const next = [...items]
+    const [moved] = next.splice(src, 1)
+    next.splice(dst, 0, moved)
+    setItems(next)                           // optimistic
+    try { await api.reorderQuestions(next.map(q => q.id)) }
+    catch (e) { setErr(e.message); refresh() }
+  }
+  const onDragEnd = () => { setDragId(null); setOverId(null); dragging.current = false }
 
   return (
     <div className="page">
@@ -80,23 +150,40 @@ export default function Pytania() {
       </form>
 
       <section className="card">
-        <h2 className="h">Bank ({items.length})</h2>
+        <div className="q-op-header">
+          <h2 className="h">Bank ({items.length}) <span className="muted" style={{ fontWeight: 400, fontSize: '.85rem' }}>— przeciagnij wiersz za uchwyt aby zmienic kolejnosc</span></h2>
+          <div className="row" style={{ gap: '.35rem' }}>
+            <button className="mini" onClick={exportJson} disabled={items.length === 0} title="Pobierz plik JSON z pytaniami">Eksport JSON</button>
+            <label className="mini" style={{ cursor: 'pointer' }} title="Wczytaj plik JSON — dopisze do banku">
+              Import JSON
+              <input type="file" accept="application/json,.json" onChange={onImportFile} style={{ display: 'none' }} />
+            </label>
+          </div>
+        </div>
         {items.length === 0 ? <p className="muted">Bank jest pusty.</p> : (
           <table className="tbl">
-            <thead><tr><th>#</th><th>R</th><th>Tresc</th><th>Odpowiedz</th><th>Uzyte</th><th /></tr></thead>
+            <thead><tr><th /><th>#</th><th>R</th><th>Tresc</th><th>Odpowiedz</th><th /></tr></thead>
             <tbody>
               {items.map((q, i) => {
                 const active = current?.questionId
                   ? current.questionId === q.id
                   : !!(current?.text && current.text.trim() === q.text.trim())
-                const hasAnswer = !!(current?.answer && current.answer.trim())
+                const isDragging = dragId === q.id
+                const isOver     = overId === q.id && dragId !== q.id
                 return (
-                  <tr key={q.id} className={active ? 'active' : ''}>
+                  <tr key={q.id}
+                      className={`${active ? 'active' : ''} ${isDragging ? 'dragging' : ''} ${isOver ? 'drop-target' : ''}`}
+                      onDragOver={onDragOver(q.id)}
+                      onDrop={onDrop(q.id)}
+                      onDragEnd={onDragEnd}>
+                    <td className="drag-handle"
+                        draggable
+                        onDragStart={onDragStart(q.id)}
+                        title="Przeciagnij, aby zmienic kolejnosc">⋮⋮</td>
                     <td>{i + 1}</td>
                     <td><span className={`badge r${q.round}`}>R{q.round}</span></td>
                     <td className="q-cell">{q.text}</td>
                     <td className="muted">{q.answer || '—'}</td>
-                    <td>{q.used}</td>
                     <td className="actions">
                       {active ? (
                         <>

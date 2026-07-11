@@ -1,30 +1,35 @@
-import { useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import { api, subscribeState } from '../api'
 import SoundBoard from '../components/SoundBoard.jsx'
+import HoldButton from '../components/HoldButton.jsx'
 
 export default function Operator() {
   const [state, setState] = useState(null)
   const [users, setUsers] = useState([])
   const [brightness, setBrightness] = useState(128)
-  const [question, setQuestion] = useState({ text: '', answer: '', round: 1, showAnswer: false })
   const [err, setErr] = useState(null)
-  const qSuppress = useRef(0)
 
   useEffect(() => subscribeState((s) => {
     setState(s); setErr(null)
     setBrightness(s.brightness ?? 128)
-    if (Date.now() > qSuppress.current && s.question) {
-      setQuestion({
-        text:   s.question.text   || '',
-        answer: s.question.answer || '',
-        round:  s.question.round  || 1,
-        showAnswer: !!s.question.showAnswer,
-      })
-    }
   }), [])
 
   useEffect(() => { api.users().then(setUsers).catch(e => setErr(e.message)) }, [])
+
+  const [questions, setQuestions] = useState([])
+  useEffect(() => { api.questions().then(setQuestions).catch(() => {}) },
+             [state?.question?.questionId, state?.question?.updatedAt])
+
+  // Filtr rundy dla nawigacji "poprzednie/nastepne". Trzymamy w localStorage.
+  const [navRound, setNavRound] = useState(() => {
+    const v = localStorage.getItem('1z9.navRound')
+    return v === '1' || v === '2' ? +v : null
+  })
+  const changeNavRound = (r) => {
+    setNavRound(r)
+    if (r) localStorage.setItem('1z9.navRound', String(r))
+    else   localStorage.removeItem('1z9.navRound')
+  }
 
   const run = async (fn) => { try { await fn() } catch (e) { setErr(e.message) } }
 
@@ -33,6 +38,13 @@ export default function Operator() {
   const events  = state?.events  || []
   const round2  = !!state?.round2
   const espOk   = !!state?.espOk
+  const curQ    = state?.question
+  const hasAnswer = !!(curQ?.answer && curQ.answer.trim())
+  const filteredQuestions = navRound ? questions.filter(q => q.round === navRound) : questions
+  const qIdx = curQ?.questionId ? filteredQuestions.findIndex(q => q.id === curQ.questionId) : -1
+  const qPosLabel = curQ?.text
+    ? (qIdx >= 0 ? `Pytanie ${qIdx + 1}/${filteredQuestions.length}` : 'Recznie wpisane')
+    : null
 
   return (
     <div className="page">
@@ -44,11 +56,29 @@ export default function Operator() {
       {err && <div className="err">Blad: {err}</div>}
 
       <section className="controls">
-        <button className={`btn ${round2 ? 'off' : 'go'}`} onClick={() => run(round2 ? api.round2Stop : api.round2Start)}>
-          {round2 ? 'Runda 2: STOP' : 'Runda 2: START'}
-        </button>
-        <button className="btn" onClick={() => run(api.resetLives)}>Reset zyc (3/3)</button>
-        <button className="btn" onClick={() => run(api.resetSeats)}>Wyczysc siedzenia</button>
+        <div className="qnav">
+          <div className="qnav-filter" title="Zakres nawigacji Poprzednie/Nastepne">
+            <button className={`chip ${navRound === null ? 'on' : ''}`} onClick={() => changeNavRound(null)}>Wsz.</button>
+            <button className={`chip ${navRound === 1 ? 'on' : ''}`}    onClick={() => changeNavRound(1)}>R1</button>
+            <button className={`chip ${navRound === 2 ? 'on' : ''}`}    onClick={() => changeNavRound(2)}>R2</button>
+          </div>
+          <button className="btn" onClick={() => run(() => api.prevQuestion(navRound))} title="Poprzednie pytanie">◀</button>
+          <div className="qnav-pos">
+            {qPosLabel ? (
+              <>
+                <span className={`badge r${curQ.round}`}>R{curQ.round}</span>
+                <span className="qnav-num">{qPosLabel}</span>
+              </>
+            ) : <span className="muted">brak pytania</span>}
+          </div>
+          <button className="btn" onClick={() => run(() => api.nextQuestion(navRound))} title="Nastepne pytanie">▶</button>
+          <button className="btn" onClick={() => run(() => api.reveal(!curQ?.showAnswer))}
+                  disabled={!curQ?.text || !hasAnswer} title="Odslon/ukryj odpowiedz">
+            {curQ?.showAnswer ? 'Ukryj odp.' : 'Odslon odp.'}
+          </button>
+        </div>
+        <button className="btn" onClick={() => run(api.resetLives)}>Reset zyc</button>
+        <button className="btn" onClick={() => run(api.resetSeats)}>Wyczysc siedz.</button>
         <label className="slider">
           <span>Jasnosc: {brightness}</span>
           <input type="range" min="0" max="255" value={brightness}
@@ -79,8 +109,7 @@ export default function Operator() {
                   {[0, 1, 2].map(s => {
                     const on = hasUser && s < lives
                     return <div key={s} className="stand-led"
-                                style={{ background: on ? color : '#26262e',
-                                         boxShadow: on ? `0 0 14px ${color}` : 'none' }} />
+                                style={{ background: on ? color : '#26262e' }} />
                   })}
                 </div>
 
@@ -140,46 +169,12 @@ export default function Operator() {
         <SoundBoard />
       </section>
 
-      <section className="card">
-        <div className="q-op-header">
-          <h2 className="h">Pytanie na prezentacji</h2>
-          <Link to="/pytania" className="mini">bank pytan →</Link>
-        </div>
-        <div className="q-op-form">
-          <div className="q-op-round">
-            <label className={`chip ${question.round === 1 ? 'on' : ''}`}>
-              <input type="radio" name="qround" checked={question.round === 1}
-                     onChange={() => { qSuppress.current = Date.now() + 1500; setQuestion(q => ({ ...q, round: 1 })) }} /> RUNDA 1
-            </label>
-            <label className={`chip ${question.round === 2 ? 'on' : ''}`}>
-              <input type="radio" name="qround" checked={question.round === 2}
-                     onChange={() => { qSuppress.current = Date.now() + 1500; setQuestion(q => ({ ...q, round: 2 })) }} /> RUNDA 2
-            </label>
-          </div>
-          <textarea rows={2} placeholder="Tresc pytania (widoczna na prezentacji)"
-                    value={question.text}
-                    onChange={e => { qSuppress.current = Date.now() + 1500; setQuestion(q => ({ ...q, text: e.target.value })) }} />
-          <input placeholder="Odpowiedz (opcjonalna — ukryta do 'odslon')"
-                 value={question.answer}
-                 onChange={e => { qSuppress.current = Date.now() + 1500; setQuestion(q => ({ ...q, answer: e.target.value })) }} />
-          <div className="row">
-            <button className="btn go" onClick={() => run(() => api.setQuestion(question.text, question.answer, question.round, question.showAnswer))}>
-              Pokaz na prezentacji
-            </button>
-            <button className="btn" onClick={() => {
-              const show = !question.showAnswer
-              setQuestion(q => ({ ...q, showAnswer: show }))
-              qSuppress.current = Date.now() + 1500
-              run(() => api.reveal(show))
-            }} disabled={!question.answer}>
-              {question.showAnswer ? 'Ukryj odpowiedz' : 'Odslon odpowiedz'}
-            </button>
-            <button className="btn off" onClick={() => { setQuestion({ text: '', answer: '', round: question.round, showAnswer: false }); run(api.clearQuestion) }}>
-              Zdejmij
-            </button>
-          </div>
-        </div>
-      </section>
+      <div className="danger-zone">
+        <HoldButton className="danger-btn" onConfirm={() => run(api.resetGame)} duration={2000}
+                    hint="Przytrzymaj 2 sekundy">
+          RESTART CAŁKOWITY
+        </HoldButton>
+      </div>
     </div>
   )
 }

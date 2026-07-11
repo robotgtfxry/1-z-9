@@ -66,6 +66,9 @@ export const api = {
   // kolor stanowiska (jeden na siedzenie, zycia sterują sektorami)
   setSeatColor:(seat, color) => j('POST', `/api/seats/${seat}/color`, { color }),
 
+  // pelen reset gry (siedzenia + przyciski + pytanie + LEDy)
+  resetGame:   ()      => j('POST', '/api/reset-game'),
+
   // przyciski rundy 2 (0..2)
   buttons:     () => j('GET',  '/api/buttons'),
   setButton:   (button, userId) => j('POST', `/api/buttons/${button}`, { userId }),
@@ -90,6 +93,12 @@ export const api = {
   addQuestion: (text, answer, round) => j('POST',   '/api/questions', { text, answer, round }),
   editQuestion:(id, patch) => j('PUT',    `/api/questions/${id}`, patch),
   delQuestion: (id)        => j('DELETE', `/api/questions/${id}`),
+  reorderQuestions: (ids)  => j('POST',   '/api/questions/reorder', { ids }),
+  importQuestions: (questions) => j('POST', '/api/questions/import', { questions }),
+
+  // nawigacja: nastepne/poprzednie z banku (opcjonalnie zawezone do rundy)
+  nextQuestion: (round) => j('POST', `/api/question/next${round ? `?round=${round}` : ''}`),
+  prevQuestion: (round) => j('POST', `/api/question/prev${round ? `?round=${round}` : ''}`),
 
   // pytania - aktualne
   setQuestion: (text, answer, round, showAnswer = false) => j('POST', '/api/question', { text, answer, round, showAnswer }),
