@@ -441,9 +441,382 @@ h2 { margin: 0; }
 .stand-points .mini { padding: .35rem .55rem; font-weight: 700; }
 
 /* =====================================================================
-   WYNIKI LIVE — tech dashboard. Kolumny, thin borders, monospace,
-   status bar u gory i u dolu. Bez glow, bez gradientow.
+   WYNIKI — te same kolory/font co reszta apki, tylko wielka typografia.
    ===================================================================== */
+
+.wyn {
+  position: fixed; inset: 0;
+  background: radial-gradient(1200px 800px at 30% -10%, #1a1c2a 0%, var(--bg) 60%);
+  color: var(--text);
+  padding: 5vh 6vw 4vh;
+  display: grid; grid-template-rows: auto 1fr;
+  gap: 4vh;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* --- TOP LINE --- */
+.wyn-top {
+  display: grid; grid-template-columns: auto 1fr auto;
+  align-items: baseline; gap: 2vw;
+  padding-bottom: 3vh;
+  border-bottom: 1px solid var(--border);
+}
+.wyn-brand {
+  font-size: clamp(1rem, 1.4vw, 1.3rem);
+  font-weight: 700; letter-spacing: -.01em;
+  color: var(--text);
+}
+.wyn-round {
+  font-size: clamp(.9rem, 1.2vw, 1.15rem);
+  font-weight: 500; color: var(--muted);
+}
+.wyn-count {
+  font-size: clamp(1.4rem, 2.2vw, 2rem);
+  font-weight: 700; color: var(--text);
+  font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+}
+.wyn-count span {
+  font-size: .55em; color: var(--muted); font-weight: 500; margin-left: 6px;
+}
+.wyn-count-idle {
+  font-size: clamp(1rem, 1.3vw, 1.2rem);
+  font-weight: 500; color: var(--muted); font-style: italic;
+}
+
+/* --- LIST --- */
+.wyn-list {
+  list-style: none; padding: 0; margin: 0;
+  display: grid; grid-auto-rows: 1fr;
+  min-height: 0;
+}
+
+.wyn-list li {
+  --seat-color: var(--text);
+  display: grid;
+  grid-template-columns: 3.5rem 1fr auto auto;
+  gap: 3vw; align-items: center;
+  padding: 0 1vw;
+  border-bottom: 1px solid var(--border);
+  transition: opacity .6s ease;
+}
+.wyn-list li:last-child { border-bottom: 0; }
+
+.wyn-idx {
+  font-size: clamp(.95rem, 1.3vw, 1.2rem);
+  font-weight: 500; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wyn-name {
+  font-size: clamp(1.8rem, 3.4vw, 3.4rem);
+  font-weight: 600; letter-spacing: -.01em;
+  line-height: 1.05; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.wyn-dots { display: flex; gap: 1vw; }
+.wyn-dots span {
+  width: clamp(1.8rem, 2.4vw, 2.4rem);
+  height: clamp(1.8rem, 2.4vw, 2.4rem);
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: transparent;
+  transition: background .5s ease, border-color .5s ease;
+}
+.wyn-dots span.on {
+  background: var(--seat-color);
+  border-color: var(--seat-color);
+}
+
+/* --- STATE --- */
+.wyn-list li.empty { opacity: 1; }
+.wyn-list li.empty .wyn-name {
+  font-weight: 400; font-style: italic;
+  color: var(--border); letter-spacing: -.01em;
+  font-size: clamp(1.6rem, 2.8vw, 2.8rem);
+}
+.wyn-list li.empty .wyn-idx { color: var(--border); }
+
+.wyn-list li.out { opacity: .35; }
+.wyn-list li.out .wyn-name {
+  text-decoration: line-through;
+  text-decoration-thickness: 3px;
+  text-decoration-color: var(--text);
+}
+
+.wyn-pts {
+  font-size: clamp(1.6rem, 2.8vw, 2.8rem);
+  font-weight: 700; letter-spacing: -.02em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5ch; text-align: right;
+}
+.wyn-list li:first-child:not(.empty):not(.out) .wyn-pts { color: var(--text); }
+
+/* --- R2 tweaks --- */
+.wyn-r2 .wyn-name { font-size: clamp(2.2rem, 4vw, 4rem); }
+.wyn-r2 .wyn-pts { font-size: clamp(2rem, 3.2vw, 3rem); font-weight: 800; }
+.wyn-r2 .wyn-list li.v-ok .wyn-pts { color: var(--text); }
+.wyn-r2 .wyn-list li.v-cur .wyn-name { color: var(--text); }
+.wyn-r2 .wyn-list li.v-cur .wyn-idx { color: var(--text); }
+.wyn-r2 .wyn-list li.v-bad { opacity: .35; }
+.wyn-r2 .wyn-list li.v-bad .wyn-name {
+  text-decoration: line-through; text-decoration-thickness: 3px;
+  text-decoration-color: var(--text);
+}
+
+/* --- HEADER --- */
+.wyn-hdr {
+  display: grid; grid-template-columns: 1fr auto;
+  align-items: center; gap: 2vw;
+  padding: 2vh 2.5vw;
+  background: linear-gradient(180deg, var(--panel) 0%, var(--panel2) 100%);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.wyn-hdr-l { display: flex; align-items: center; gap: 1.5vw; }
+
+.wyn-badge {
+  padding: .55rem 1.2rem; border-radius: 999px;
+  font-size: clamp(.85rem, 1.1vw, 1.05rem); font-weight: 800; letter-spacing: .22em;
+}
+.wyn-badge-r1 {
+  background: linear-gradient(135deg, #3ad973, #2d6a4f); color: #04140a;
+  box-shadow: 0 4px 16px rgba(58,217,115,.28);
+}
+.wyn-badge-r2 {
+  background: linear-gradient(135deg, var(--gold), #d99a1a); color: #201700;
+  box-shadow: 0 4px 16px rgba(245,197,24,.28);
+}
+
+.wyn-hdr-title {
+  font-size: clamp(1.2rem, 1.8vw, 1.8rem); font-weight: 500;
+  color: var(--muted); letter-spacing: -.01em;
+}
+
+.wyn-hdr-r {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+}
+.wyn-stat {
+  display: flex; align-items: baseline; gap: .1em;
+  font-size: clamp(2.4rem, 4.5vw, 4.5rem); font-weight: 800;
+  color: var(--text); font-variant-numeric: tabular-nums; line-height: .9;
+  letter-spacing: -.03em;
+}
+.wyn-stat-num {
+  color: var(--accent);
+  display: inline-block;
+  animation: statPop .45s cubic-bezier(.2,.9,.3,1.3);
+}
+@keyframes statPop {
+  from { opacity: .3; transform: translateY(4px) scale(.92); }
+  to   { opacity: 1; transform: none; }
+}
+.wyn-stat-sep { color: var(--muted); font-weight: 500; font-size: .8em; margin: 0 .15em; }
+.wyn-stat-den { color: var(--muted); font-weight: 600; }
+.wyn-stat-label {
+  font-size: clamp(.75rem, 1vw, .95rem); font-weight: 700;
+  letter-spacing: .3em; color: var(--muted);
+}
+
+.wyn-hdr-current {
+  font-size: clamp(2rem, 3.5vw, 3.5rem); font-weight: 800; line-height: 1;
+  letter-spacing: -.02em;
+  background: linear-gradient(135deg, var(--gold), #ffd45e);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  animation: statPop .4s cubic-bezier(.2,.9,.3,1.3);
+  max-width: 45vw; text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wyn-hdr-current-sub {
+  font-size: clamp(.9rem, 1.2vw, 1.1rem); font-weight: 500;
+  color: var(--muted); letter-spacing: .04em;
+}
+.wyn-hdr-current-sub b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.wyn-hdr-idle {
+  font-size: clamp(1rem, 1.4vw, 1.3rem); font-weight: 600;
+  color: var(--muted); letter-spacing: .04em;
+  animation: idlePulse 1.4s ease-in-out infinite;
+}
+@keyframes idlePulse { 50% { opacity: .5; } }
+
+/* --- CARDS --- */
+.wyn-cards {
+  display: grid; grid-auto-rows: 1fr; gap: 1vh;
+  min-height: 0;
+}
+.wyn-cards--r2 { gap: 1.5vh; }
+
+.wyn-card {
+  --seat-color: #3ad973;
+  display: grid;
+  grid-template-columns: clamp(3.5rem, 5vw, 5rem) 1fr auto auto;
+  gap: 2vw; align-items: center;
+  padding: 0 1.8vw;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--seat-color) 5%, var(--panel)) 0%,
+    var(--panel) 40%,
+    var(--panel2) 100%);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--seat-color);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.03);
+  transition: opacity .5s ease, transform .35s ease, border-color .35s ease;
+}
+
+.wyn-card-num {
+  font-size: clamp(1.8rem, 2.8vw, 2.8rem); font-weight: 800;
+  color: color-mix(in srgb, var(--seat-color) 45%, var(--muted));
+  font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1;
+}
+.wyn-card-name {
+  font-size: clamp(1.5rem, 2.8vw, 2.8rem); font-weight: 700;
+  color: var(--text); letter-spacing: -.015em; line-height: 1.05;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wyn-card-lives { display: flex; gap: 8px; align-items: center; }
+.wyn-hp {
+  width: clamp(1.8rem, 2.4vw, 2.4rem);
+  height: clamp(1.8rem, 2.4vw, 2.4rem);
+  border-radius: 50%;
+  background: rgba(255,255,255,.05);
+  border: 2px solid rgba(255,255,255,.08);
+  transition: background .4s ease, border-color .4s ease, transform .35s cubic-bezier(.2,.9,.3,1.3);
+}
+.wyn-hp.on {
+  background: var(--seat-color);
+  border-color: var(--seat-color);
+}
+.wyn-card-status {
+  font-size: clamp(.85rem, 1.15vw, 1.1rem); font-weight: 700;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--accent);
+  min-width: 6.5rem; text-align: right;
+  padding: .35rem .8rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+/* --- state variants R1 --- */
+.wyn-card--empty {
+  opacity: .32;
+  background: var(--panel2);
+  border-left-color: var(--border);
+}
+.wyn-card--empty .wyn-card-name { color: var(--muted); font-weight: 500; font-style: italic; }
+.wyn-card--empty .wyn-card-num  { color: var(--border); }
+.wyn-card--empty .wyn-card-status {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+}
+
+.wyn-card--out {
+  opacity: .55;
+  border-left-color: var(--danger);
+}
+.wyn-card--out .wyn-card-name {
+  color: var(--muted);
+  text-decoration: line-through; text-decoration-thickness: 2px;
+  text-decoration-color: color-mix(in srgb, var(--danger) 70%, transparent);
+}
+.wyn-card--out .wyn-card-status {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+
+/* --- Row R2 --- */
+.wyn-card-r2 {
+  grid-template-columns: clamp(4.5rem, 6vw, 6rem) 1fr auto auto auto auto;
+  gap: 2.2vw;
+  padding: 0 2vw;
+  border-radius: 16px;
+  border-width: 2px;
+  border-left-width: 4px;
+}
+.wyn-card-r2 .wyn-card-num {
+  font-size: clamp(1.6rem, 2.4vw, 2.4rem);
+}
+.wyn-card-r2 .wyn-card-name {
+  font-size: clamp(2.2rem, 4.5vw, 4.5rem);
+}
+.wyn-card-r2 .wyn-hp {
+  width: clamp(2rem, 2.6vw, 2.6rem);
+  height: clamp(2rem, 2.6vw, 2.6rem);
+}
+.wyn-card-pts {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+  padding: 0 .5vw;
+}
+.wyn-pts-val {
+  font-size: clamp(2rem, 3.2vw, 3.2rem); font-weight: 800;
+  color: var(--gold); font-variant-numeric: tabular-nums; line-height: 1;
+  letter-spacing: -.02em;
+}
+.wyn-pts-lbl {
+  font-size: clamp(.7rem, .9vw, .85rem); font-weight: 700;
+  letter-spacing: .3em; color: var(--muted);
+}
+.wyn-card-ms {
+  display: flex; align-items: baseline; gap: 4px;
+  padding: 0 .5vw;
+  min-width: 5rem;
+}
+.wyn-ms-val {
+  font-size: clamp(1.4rem, 2.2vw, 2.2rem); font-weight: 700;
+  color: var(--text); font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.wyn-ms-lbl {
+  font-size: clamp(.8rem, 1vw, 1rem); font-weight: 600;
+  color: var(--muted); letter-spacing: .1em;
+}
+.wyn-ms-dash { color: var(--muted); font-size: 1.5rem; }
+.wyn-card-r2 .wyn-card-status { min-width: 9rem; padding: .5rem 1.1rem; }
+
+.wyn-card--current {
+  border-color: var(--gold);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--gold) 14%, var(--panel)) 0%,
+    var(--panel) 60%,
+    var(--panel2) 100%);
+  box-shadow: 0 8px 24px rgba(245,197,24,.18), inset 0 1px 0 rgba(255,255,255,.05);
+}
+.wyn-card--current .wyn-card-status {
+  background: linear-gradient(135deg, var(--gold), #d99a1a); color: #201700;
+  border: none;
+}
+.wyn-card--correct {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+.wyn-card--correct .wyn-card-status {
+  background: linear-gradient(135deg, var(--accent), #2d6a4f); color: #04140a;
+  border: none;
+}
+.wyn-card--wrong {
+  opacity: .5;
+  border-left-color: var(--danger);
+}
+.wyn-card--wrong .wyn-card-name {
+  color: var(--muted);
+  text-decoration: line-through; text-decoration-thickness: 2px;
+  text-decoration-color: color-mix(in srgb, var(--danger) 70%, transparent);
+}
+.wyn-card--wrong .wyn-card-status {
+  background: linear-gradient(135deg, var(--danger), #6b1e21); color: white;
+  border: none;
+}
+.wyn-card--ready .wyn-card-status {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  border: 1px solid var(--border);
+}
+.wyn-card--empty.wyn-card-r2 { opacity: .3; }
+
+/* ==== stary tech dashboard ponizej, zachowany do czasu usuniecia niepotrzebnych klas ==== */
 
 .wyniki-live {
   --wbg:      #0a0c10;

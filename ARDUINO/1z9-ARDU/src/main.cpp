@@ -7,7 +7,10 @@
 //
 //  Pinout:
 //    LED DATA:  D2..D10  (panele 1..9)
-//    Przyciski: A0, A1, A2 (runda 2 - 3 finalistow)
+//    Przyciski: A0, A1, A2 (runda 2 - 3 finalistow, styki)
+//    Lampki:    D11, D12, D13 (podswietlenie przyciskow; masa wspolna /
+//               katoda wspolna, HIGH = swieci). Pierwszy nacisniety w
+//               rundzie 2 swieci 5 s, potem gasnie.
 //    Serial:    D0 (RX) <- ESP32 TX (przez level shifter)
 //               D1 (TX) -> ESP32 RX (przez level shifter)
 //
@@ -37,6 +40,10 @@
 #define NUM_BUTTONS        3
 const uint8_t BTN_PINS[NUM_BUTTONS] = { A0, A1, A2 };
 
+// Lampki przyciskow — masa wspolna (katoda), stan HIGH na pinie zapala lampke.
+const uint8_t LAMP_PINS[NUM_BUTTONS] = { 11, 12, 13 };
+const unsigned long LAMP_HOLD_MS = 5000;   // pierwszy nacisniety swieci 5 s
+
 #define LINK       Serial
 #define LINK_BAUD  115200
 
@@ -52,6 +59,12 @@ bool btnLast[NUM_BUTTONS] = { false };
 bool btnReported[NUM_BUTTONS] = { false };
 unsigned long btnDebounceMs[NUM_BUTTONS] = { 0 };
 const unsigned long DEBOUNCE = 25;
+
+int firstBtn = -1;                 // kto byl pierwszy w tej rundzie (-1 = nikt)
+bool lampActive = false;           // czy lampka pierwszego aktualnie swieci
+unsigned long lampOnMs = 0;        // moment zapalenia lampki (millis)
+
+void lampsAllOff();                // uzywane w handleCommand (definicja nizej)
 
 String rxBuf;
 
@@ -130,10 +143,13 @@ void handleCommand(String cmd) {
     round2Active = true;
     round2StartMs = millis();
     for (int i = 0; i < NUM_BUTTONS; i++) btnReported[i] = false;
+    firstBtn = -1;
+    lampsAllOff();
     LINK.println(F("ROUND2:STARTED"));
   }
   else if (cmd == "ROUND2:STOP") {
     round2Active = false;
+    lampsAllOff();
     LINK.println(F("ROUND2:STOPPED"));
   }
   else if (cmd == "PING") LINK.println(F("PONG"));
@@ -142,8 +158,29 @@ void handleCommand(String cmd) {
 void readLink() {
   while (LINK.available()) {
     char c = LINK.read();
-    if (c == '\n') { handleCommand(rxBuf); rxBuf = ""; }
-    else if (c != '\r' && rxBuf.length() < 96) rxBuf += c;
+    if (c == '\n' || c == '\r') {          // akceptuj LF, CR i CRLF
+      if (rxBuf.length()) { handleCommand(rxBuf); rxBuf = ""; }
+    } else if (rxBuf.length() < 96) {
+      rxBuf += c;
+    }
+  }
+}
+
+// -------- LAMPKI PRZYCISKOW --------
+void lampsAllOff() {
+  for (int i = 0; i < NUM_BUTTONS; i++) digitalWrite(LAMP_PINS[i], LOW);
+  lampActive = false;
+}
+
+// Gasi lampke pierwszego po uplywie LAMP_HOLD_MS i re-armuje na kolejne
+// nacisniecie (bez resetu Arduino). Przycisk trzymany wcisniety nie odpali
+// od razu ponownie — trzeba go puscic i nacisnac jeszcze raz.
+void updateLamp() {
+  if (lampActive && (millis() - lampOnMs) >= LAMP_HOLD_MS) {
+    digitalWrite(LAMP_PINS[firstBtn], LOW);
+    lampActive = false;
+    firstBtn = -1;
+    for (int i = 0; i < NUM_BUTTONS; i++) btnReported[i] = false;
   }
 }
 
@@ -163,6 +200,13 @@ void pollButtons() {
         LINK.print(i);
         LINK.print(':');
         LINK.println(dt);
+
+        if (firstBtn < 0) {              // ten byl pierwszy w rundzie
+          firstBtn = i;
+          digitalWrite(LAMP_PINS[i], HIGH);
+          lampActive = true;
+          lampOnMs = now;
+        }
       }
     }
   }
@@ -183,7 +227,25 @@ void setup() {
   FastLED.addLeds<WS2812B, 9,  GRB>(leds[7], LEDS_PER_PANEL);
   FastLED.addLeds<WS2812B, 10, GRB>(leds[8], LEDS_PER_PANEL);
 
-  for (int i = 0; i < NUM_BUTTONS; i++) pinMode(BTN_PINS[i], INPUT_PULLUP);
+  for (int i = 0; i < NUM_BUTTONS; i++) {
+    pinMode(BTN_PINS[i], INPUT_PULLUP);
+    pinMode(LAMP_PINS[i], OUTPUT);
+    digitalWrite(LAMP_PINS[i], LOW);
+  }
+
+  // Krotki test lampek przy starcie — mrugniecie 11 -> 12 -> 13.
+  // Potwierdza okablowanie lampek bez ESP i bez rundy 2.
+  for (int i = 0; i < NUM_BUTTONS; i++) {
+    digitalWrite(LAMP_PINS[i], HIGH);
+    delay(200);
+    digitalWrite(LAMP_PINS[i], LOW);
+  }
+
+  // Przyciski aktywne od razu po starcie (bez czekania na ROUND2:START z ESP).
+  // Przed runda 2 przyciski sa fizycznie schowane, wiec nie ma ryzyka.
+  // ROUND2:START z ESP i tak zresetuje "pierwszego" na start prawdziwej rundy.
+  round2Active = true;
+  round2StartMs = millis();
   for (int p = 0; p < NUM_PANELS; p++)
     for (int s = 0; s < SECTORS_PER_PANEL; s++)
       sectorColor[p][s] = CRGB::Black;
@@ -195,4 +257,5 @@ void setup() {
 void loop() {
   readLink();
   pollButtons();
+  updateLamp();
 }

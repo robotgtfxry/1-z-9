@@ -30,6 +30,8 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import urllib.parse
+import urllib.request
 import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext
@@ -58,6 +60,8 @@ WEB_DIST   = RES_DIR / "web" / "dist"
 BUNDLED_NODE = RES_DIR / "node" / "node.exe"
 DB_PATH = APP_DIR / "data.db"     # persystentnie obok launchera
 SOUNDS_JSON = APP_DIR / "sounds.json"  # konfiguracja slotow dzwiekowych
+WIFI_JSON = APP_DIR / "wifi.json"      # ostatnio wpisana siec dla ESP (SSID/IP/brama)
+ESP_AP_URL = "http://192.168.4.1"      # adres ESP w trybie konfiguracji (AP "1z9-setup")
 DEFAULT_PORT = 4000
 AUDIO_EXTS = [("Pliki dzwiekowe", "*.mp3 *.wav *.ogg *.m4a *.flac"), ("Wszystkie pliki", "*.*")]
 
@@ -93,7 +97,7 @@ class App:
 
     def _build_ui(self):
         self.root.title("1 z 9 — launcher")
-        self.root.geometry("900x640")
+        self.root.geometry("900x760")
         self.root.configure(bg="#0d0e12")
 
         # ---- Nagłówek ----
@@ -145,6 +149,9 @@ class App:
         self.clear_btn = tk.Button(actions, text="Wyczysc logi", command=self.clear_log,
                                    bg="#23242e", fg="#8b8ea0", relief="flat", padx=10, pady=8)
         self.clear_btn.pack(side="right", padx=4)
+
+        # ---- Siec WiFi dla ESP ----
+        self._build_wifi_ui()
 
         # ---- Sloty dzwiekow (9x) ----
         self._build_sounds_ui()
@@ -234,6 +241,130 @@ class App:
             self.add_log(f"[launcher] Zapisano sloty do {SOUNDS_JSON.name}\n")
         except Exception as e:
             messagebox.showerror("Zapis slotow", str(e))
+
+    # ---------------- Siec WiFi dla ESP ----------------
+
+    def _load_wifi_config(self) -> dict:
+        if WIFI_JSON.exists():
+            try:
+                return json.loads(WIFI_JSON.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def _save_wifi_config(self):
+        # Hasla celowo NIE zapisujemy na dysk — tylko SSID/IP/brame dla wygody.
+        cfg = {
+            "ssid": self.wifi_ssid.get().strip(),
+            "ip":   self.wifi_ip.get().strip(),
+            "gw":   self.wifi_gw.get().strip(),
+        }
+        try:
+            WIFI_JSON.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _build_wifi_ui(self):
+        wrap = tk.Frame(self.root, bg="#0d0e12", padx=14, pady=6)
+        wrap.pack(fill="x")
+        tk.Label(
+            wrap,
+            text="Siec WiFi dla ESP — gdy ESP wystawi siec „1z9-setup”: "
+                 "podlacz do niej laptop, wpisz siec docelowa i wyslij",
+            bg="#0d0e12", fg="#8b8ea0", anchor="w", font=("Segoe UI", 9),
+        ).pack(fill="x", pady=(4, 6))
+
+        box = tk.Frame(wrap, bg="#1a1b23", padx=10, pady=8)
+        box.pack(fill="x")
+        cfg = self._load_wifi_config()
+
+        r1 = tk.Frame(box, bg="#1a1b23"); r1.pack(fill="x", pady=2)
+        tk.Label(r1, text="SSID", width=8, anchor="w", bg="#1a1b23", fg="#eaeaf0",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.wifi_ssid = tk.StringVar(value=cfg.get("ssid", ""))
+        tk.Entry(r1, textvariable=self.wifi_ssid, bg="#23242e", fg="#eaeaf0", relief="flat",
+                 font=("Consolas", 10)).pack(side="left", fill="x", expand=True, ipady=3)
+
+        r2 = tk.Frame(box, bg="#1a1b23"); r2.pack(fill="x", pady=2)
+        tk.Label(r2, text="Haslo", width=8, anchor="w", bg="#1a1b23", fg="#eaeaf0",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.wifi_pass = tk.StringVar(value="")
+        self.wifi_pass_entry = tk.Entry(r2, textvariable=self.wifi_pass, show="*", bg="#23242e",
+                                        fg="#eaeaf0", relief="flat", font=("Consolas", 10))
+        self.wifi_pass_entry.pack(side="left", fill="x", expand=True, ipady=3)
+        self.wifi_show = tk.BooleanVar(value=False)
+        tk.Checkbutton(r2, text="pokaz", variable=self.wifi_show, command=self._toggle_wifi_pass,
+                       bg="#1a1b23", fg="#8b8ea0", activebackground="#1a1b23",
+                       selectcolor="#23242e", relief="flat", font=("Segoe UI", 8)).pack(side="left", padx=4)
+
+        r3 = tk.Frame(box, bg="#1a1b23"); r3.pack(fill="x", pady=2)
+        tk.Label(r3, text="IP ESP", width=8, anchor="w", bg="#1a1b23", fg="#eaeaf0",
+                 font=("Segoe UI", 9)).pack(side="left")
+        self.wifi_ip = tk.StringVar(value=cfg.get("ip", "192.168.1.50"))
+        tk.Entry(r3, textvariable=self.wifi_ip, width=16, bg="#23242e", fg="#eaeaf0", relief="flat",
+                 font=("Consolas", 10)).pack(side="left", ipady=3)
+        tk.Label(r3, text="Brama", anchor="e", bg="#1a1b23", fg="#eaeaf0",
+                 font=("Segoe UI", 9)).pack(side="left", padx=(12, 4))
+        self.wifi_gw = tk.StringVar(value=cfg.get("gw", "192.168.1.1"))
+        tk.Entry(r3, textvariable=self.wifi_gw, width=16, bg="#23242e", fg="#eaeaf0", relief="flat",
+                 font=("Consolas", 10)).pack(side="left", ipady=3)
+
+        r4 = tk.Frame(box, bg="#1a1b23"); r4.pack(fill="x", pady=(6, 2))
+        self.wifi_send_btn = tk.Button(r4, text="Wyslij do ESP (1z9-setup)", command=self._send_wifi,
+                                       bg="#2d6a4f", fg="white", relief="flat", padx=14, pady=6,
+                                       font=("Segoe UI", 10, "bold"))
+        self.wifi_send_btn.pack(side="left")
+        tk.Label(r4, text="najpierw podlacz laptop do WiFi „1z9-setup”",
+                 bg="#1a1b23", fg="#8b8ea0", font=("Segoe UI", 8)).pack(side="left", padx=8)
+
+    def _toggle_wifi_pass(self):
+        self.wifi_pass_entry.configure(show="" if self.wifi_show.get() else "*")
+
+    def _send_wifi(self):
+        ssid = self.wifi_ssid.get().strip()
+        pw   = self.wifi_pass.get()
+        ip   = self.wifi_ip.get().strip()
+        gw   = self.wifi_gw.get().strip()
+        if not ssid or not ip or not gw:
+            messagebox.showwarning("WiFi ESP", "Podaj SSID, IP i brame.")
+            return
+        self._save_wifi_config()
+        self.wifi_send_btn.configure(state="disabled")
+        self.add_log(f"[wifi] Wysylanie do ESP ({ESP_AP_URL}) ...\n")
+        threading.Thread(target=self._send_wifi_worker,
+                         args=(ssid, pw, ip, gw), daemon=True).start()
+
+    def _send_wifi_worker(self, ssid, pw, ip, gw):
+        data = urllib.parse.urlencode({"ssid": ssid, "pass": pw, "ip": ip, "gw": gw}).encode()
+        ok, msg = False, ""
+        try:
+            req = urllib.request.Request(f"{ESP_AP_URL}/wifi", data=data, method="POST")
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                resp.read()
+                code = resp.getcode()
+                ok = code is not None and code < 400
+                msg = f"HTTP {code}"
+        except Exception as e:
+            msg = str(e)
+        self.root.after(0, lambda: self._send_wifi_done(ok, ssid, ip, msg))
+
+    def _send_wifi_done(self, ok, ssid, ip, msg):
+        self.wifi_send_btn.configure(state="normal")
+        if ok:
+            self.add_log(f"[wifi] Wyslano. ESP restartuje i laczy z „{ssid}” pod http://{ip}\n")
+            messagebox.showinfo(
+                "WiFi ESP",
+                f"Wyslano do ESP.\nESP zrestartuje sie i polaczy z siecia „{ssid}”.\n\n"
+                f"Teraz przelacz laptop z powrotem na siec „{ssid}”.\n"
+                f"ESP bedzie dostepny pod http://{ip}",
+            )
+        else:
+            self.add_log(f"[wifi] Blad wysylki: {msg}\n")
+            messagebox.showerror(
+                "WiFi ESP",
+                f"Nie udalo sie wyslac do ESP ({ESP_AP_URL}).\n\n{msg}\n\n"
+                f"Czy laptop jest podlaczony do sieci „1z9-setup”?",
+            )
 
     # ---------------- Log queue ----------------
 

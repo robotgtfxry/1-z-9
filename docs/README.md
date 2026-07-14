@@ -3,7 +3,7 @@
 Sterowanie do gry teleturniejowej "1 z 9". Cztery czesci:
 
 1. **Arduino Uno** — steruje 9 tasmami WS2812B + czyta 3 przyciski rundy 2.
-2. **ESP32-S3** (Adafruit Metro) — WiFi + surowe JSON API do LED / przyciskow.
+2. **ESP32** (zwykly WROOM-32 DevKit) — WiFi + surowe JSON API do LED / przyciskow.
 3. **Backend Node.js + SQLite** — trzyma graczy, wyniki, siedzenia, przechwytuje eventy z ESP.
 4. **React + Vite** — panel operatora, prezentacja dla widowni, tablica wynikow, ekrany TV za graczami.
 
@@ -14,7 +14,7 @@ Sterowanie do gry teleturniejowej "1 z 9". Cztery czesci:
 ├── ARDUINO/1z9-ARDU/          # PlatformIO – Arduino Uno
 │   ├── platformio.ini
 │   └── src/main.cpp
-├── ESP/1z9-ESP/               # PlatformIO – Adafruit Metro ESP32-S3
+├── ESP/1z9-ESP/               # PlatformIO – ESP32 (WROOM-32 DevKit)
 │   ├── platformio.ini
 │   └── src/main.cpp
 ├── server/                    # Node.js backend
@@ -57,21 +57,38 @@ Sterowanie do gry teleturniejowej "1 z 9". Cztery czesci:
 
 ### Arduino Uno – pinout
 
-| Pin        | Funkcja                                    |
-|------------|--------------------------------------------|
-| D0 (RX)    | UART <- ESP32-S3 TX (przez level shifter)  |
-| D1 (TX)    | UART -> ESP32-S3 RX (przez level shifter)  |
-| D2..D10    | 9 tasm WS2812B (DATA), panele 1..9         |
-| A0, A1, A2 | 3 przyciski rundy 2 (do GND, INPUT_PULLUP) |
+| Pin           | Funkcja                                                   |
+|---------------|-----------------------------------------------------------|
+| D0 (RX)       | UART ← ESP32 TX (GPIO17). 3.3 V → 5 V wprost, bez konwersji |
+| D1 (TX)       | UART → ESP32 RX (GPIO16). **przez level shifter/dzielnik** |
+| D2..D10       | 9 tasm WS2812B (DATA), panele 1..9                        |
+| A0, A1, A2    | 3 przyciski rundy 2 (styki do GND, INPUT_PULLUP)          |
+| D11, D12, D13 | Lampki przyciskow 1/2/3 (masa wspolna, stan HIGH = swieci) |
 
 **UART D0/D1 wspoldziela z USB. Podczas flashowania odlacz linie do ESP32.**
 
-### Metro ESP32-S3 – pinout
+**Lampki przyciskow (D11/D12/D13):** wspolna katoda do GND, anoda kazdej lampki na
+pin przez rezystor ~220–330 Ω. Pierwszy nacisniety przycisk w rundzie 2 swieci 5 s,
+potem gasnie i uklad sam re-armuje sie na kolejne nacisniecie. Przyciski sa aktywne
+od razu po starcie Uno (przed runda 2 sa fizycznie schowane); `ROUND2:START` z ESP
+tez resetuje „pierwszego". Pin D13 ma wbudowany LED plytki — bedzie mrugac razem
+z lampka „3".
 
-| GPIO   | Funkcja                                        |
-|--------|------------------------------------------------|
-| 43 (TX)| Serial1 -> Arduino RX (przez level shifter)    |
-| 44 (RX)| Serial1 <- Arduino TX (przez level shifter)    |
+### ESP32 (WROOM-32 DevKit) – pinout
+
+| GPIO    | Funkcja                                                          |
+|---------|------------------------------------------------------------------|
+| 17 (TX) | Serial2 → Arduino D0/RX. 3.3 V → 5 V zwykle OK **bez** konwersji  |
+| 16 (RX) | Serial2 ← Arduino D1/TX. **5 V → 3.3 V: TU level shifter/dzielnik** |
+| GND     | Wspolna masa z Uno (obowiazkowo)                                 |
+
+> **Kierunek level shiftera:** konwersji wymaga TYLKO linia Uno D1 (TX, 5 V) →
+> ESP GPIO16 (RX, 3.3 V). Odwrotna (ESP GPIO17 3.3 V → Uno D0 5 V) dziala wprost,
+> bo Uno czyta 3.3 V jako stan wysoki. Jak masz dwukierunkowy modul TXS0108 /
+> BSS138, wpinasz i tak obie linie — to nie szkodzi.
+>
+> Piny 16/17 sa wolne na **WROOM-32**. Na module **WROVER** (z PSRAM) sa zajete —
+> wtedy uzyj np. GPIO25/26 i popraw `LINK_RX`/`LINK_TX` w `ESP/1z9-ESP/src/main.cpp`.
 
 ## Zasilanie
 
@@ -180,17 +197,31 @@ pio run -t upload
 pio device monitor
 ```
 
-### 2. ESP32-S3
+### 2. ESP32 (WROOM-32 DevKit)
 
-Uzupelnij `WIFI_SSID`, `WIFI_PASS` w `ESP\1z9-ESP\src\main.cpp`, potem:
+WiFi konfiguruje sie **bez rekompilacji**. Wgraj firmware raz:
 
 ```powershell
 cd ESP\1z9-ESP
 pio run -t upload
-pio device monitor
 ```
 
-Skopiuj IP z monitora — potrzebne dla backendu.
+ESP bez zapisanej/dostepnej sieci (albo gdy przytrzymasz **BOOT** przy resecie)
+wystawia WiFi **`1z9-setup`** (haslo `konfiguracja`). Siec docelowa podajesz na dwa sposoby:
+
+**A. Z launchera** (docelowo `.exe`) — podlacz laptop do WiFi `1z9-setup`, w launcherze
+w sekcji **„Siec WiFi dla ESP"** wpisz SSID, haslo, IP (`192.168.1.50`) i brame
+(`192.168.1.1`), klik **„Wyslij do ESP"**. Potem recznie przelacz laptop z powrotem na siec docelowa.
+
+**B. Z telefonu** (backup) — podlacz telefon do `1z9-setup`, otworz `http://192.168.4.1`,
+wpisz te same pola, zapisz.
+
+Po zapisie ESP restartuje sie i laczy z podana siecia pod podanym IP. Sprawdzenie
+**bez monitora serial**: `http://<IP>/api/health` → `{"ok":true,...}` = polaczony.
+
+> **Wazne:** podany IP musi zgadzac sie z `ESP_URL` w `server/.env`. ESP pamieta
+> **ostatnio** wpisana siec — w nowym miejscu podajesz nowa. **BOOT** przy resecie
+> zawsze wymusza tryb `1z9-setup`.
 
 ### 3. Backend Node
 
@@ -255,6 +286,5 @@ npm run build
 
 - Autoryzacja panelu (proste haslo w headerze) — inaczej ktokolwiek w sieci zmieni scene.
 - Efekty animowane w LEDach: odliczanie, blysk zwyciezcy, animacja odpadania.
-- Portal AP (`WiFiManager`) do konfiguracji WiFi bez rekompilacji ESP.
 - Historia gier: eksport CSV / PDF, statystyki sezonu.
 - Reset rundy z UI (obecnie DB nie kasuje zapisow — wystarczy usunac `data.db` na czysty stan).
